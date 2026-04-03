@@ -11,7 +11,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "50",
       "Initial_Income_Rate": "6.10%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -1608,7 +1608,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Joint Life)",
       "Withdrawal_Type": "Specified Amount",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "70",
       "Initial_Income_Rate": "6.65%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -3205,7 +3205,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Choice (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "60",
       "Initial_Income_Rate": "6.00%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": "",
@@ -4737,7 +4737,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "50",
       "Initial_Income_Rate": "5.65%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -6342,7 +6342,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Life)",
       "Withdrawal_Type": "Specified Amount",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "62",
       "Initial_Income_Rate": "6.60%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -7869,7 +7869,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Joint Life)",
       "Withdrawal_Type": "Specified Amount",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "70",
       "Initial_Income_Rate": "7.10%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -9396,7 +9396,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Joint Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "67",
       "Initial_Income_Rate": "6.25%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -11055,7 +11055,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "50",
       "Initial_Income_Rate": "5.35%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -12726,7 +12726,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "50",
       "Initial_Income_Rate": "5.65%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -14257,7 +14257,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "50",
       "Initial_Income_Rate": "6.10%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -15854,7 +15854,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "70",
       "Initial_Income_Rate": "7.15%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -17447,7 +17447,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Strategy Participation Rate Rate Allocation % Life) S&P Annual PTP Participation Rate 30% N/A 50%",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "72",
       "Initial_Income_Rate": "7.80%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -20069,27 +20069,38 @@
   },
   "Power Select AICO_TC 380 - TT.pdf": {
     "Profile": {
-      "Owner": "",
-      "Issue_Age": "",
-      "State": "",
-      "Contract_Type": "",
-      "Product": "fees and enhances the interest earned, subject to the maximum rate.",
-      "Premium": ""
+      "Owner": "Valued Client",
+      "Issue_Age": "50",
+      "State": "Oregon",
+      "Contract_Type": "NonQualified",
+      "Product": "Power Select AICO",
+      "Premium": "$400,000"
     },
     "income_details": {
-      "Living_Benefit": "",
-      "Withdrawal_Type": "",
-      "Income_Start_Age": "",
+      "Living_Benefit": "None",
+      "Withdrawal_Type": "Available Free Out",
+      "Income_Start_Age": "55",
       "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
-      "Guaranteed_Growth_Rate": "",
-      "Moderate_Return": "hypothetical values depict a 3% Assumed Credited Rate; an Overlay Credit is applied on the 5th anniversary. The 5th year Overlay Credit covers the"
+      "Guaranteed_Growth_Rate": ""
     },
     "interest_crediting_strategy": {
-      "Strategy": [],
-      "Rate": [],
-      "Allocation": [],
-      "Participation_Rate": []
+      "Strategy": [
+        "S&P Annual PTP with Cap",
+        "S&P Annual PTP Participation Rate"
+      ],
+      "Rate": [
+        "8.50%",
+        "N/A"
+      ],
+      "Allocation": [
+        "50%",
+        "50%"
+      ],
+      "Participation_Rate": [
+        "100%",
+        "40%"
+      ]
     },
     "scenario": {
       "zero_growth": {
@@ -21991,7 +22002,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Joint Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "67",
       "Initial_Income_Rate": "6.10%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -23984,7 +23995,7 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "70",
       "Initial_Income_Rate": "7.50%",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
@@ -27941,10 +27952,11 @@
     "income_details": {
       "Living_Benefit": "None",
       "Withdrawal_Type": "Specified Amount",
-      "Income_Start_Age": "",
+      "Income_Start_Age": "67",
       "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
-      "Guaranteed_Growth_Rate": ""
+      "Guaranteed_Growth_Rate": "",
+      "Withdrawal": "Withdrawal"
     },
     "interest_crediting_strategy": {
       "Strategy": [

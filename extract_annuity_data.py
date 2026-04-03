@@ -194,6 +194,9 @@ class SectionParser:
         "livingbenefit": "Living_Benefit",
         "withdrawaltype": "Withdrawal_Type",
         "ageatactivation": "Income_Start_Age",
+        "ageatactivationdate": "Income_Start_Age",
+        "ageatlifetimeincomeactivation": "Income_Start_Age",
+        "ageat1st": "Income_Start_Age",
         "ageat1stwithdrawal": "Income_Start_Age",
         "ageatfirstwithdrawal": "Income_Start_Age",
         "incomestartage": "Income_Start_Age",
@@ -238,6 +241,10 @@ class SectionParser:
             raw_key, raw_value = parsed
             key_norm = normalize_key(raw_key)
             value = raw_value.strip()
+            if not value and i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if next_line and ":" not in next_line:
+                    value = next_line
 
             if key_norm in cls.PROFILE_FIELDS:
                 profile[cls.PROFILE_FIELDS[key_norm]] = value
@@ -246,6 +253,10 @@ class SectionParser:
 
             if key_norm in cls.INCOME_FIELDS:
                 target_key = cls.INCOME_FIELDS[key_norm]
+                if target_key == "Income_Start_Age":
+                    age_match = re.search(r"\b(\d{1,3})\b", value)
+                    if age_match:
+                        value = age_match.group(1)
                 income[target_key] = value
                 living_benefit_open = target_key == "Living_Benefit"
                 continue
@@ -289,11 +300,18 @@ class SectionParser:
             r"^(Living Benefit)\s+(.+)$",
             r"^(Withdrawal Type)\s+(.+)$",
             r"^(Withdrawal Rate)\s+(.+)$",
+            r"^(Age at activation(?: date)?)\s*(.*)$",
+            r"^(Age at lifetime income activation)\s*(.*)$",
+            r"^(Age at 1st)\s*(.*)$",
+            r"^(Age at 1st withdrawal)\s*(.*)$",
+            r"^(Age at first withdrawal)\s*(.*)$",
+            r"^(Income Start Age)\s*(.*)$",
         ]
         for pat in inline_patterns:
             match = re.match(pat, line, flags=re.IGNORECASE)
             if match:
-                return match.group(1).strip(), match.group(2).strip()
+                value = match.group(2).strip() if match.lastindex and match.lastindex >= 2 else ""
+                return match.group(1).strip(), value
         return None
 
     @staticmethod
@@ -798,6 +816,15 @@ class AnnuityExtractorPipeline:
 
     @staticmethod
     def _pick_first_scenario_lines(pages: List[List[str]]) -> List[str]:
+        # Prefer a scenario page that also contains the profile/income header.
+        for lines in pages:
+            full = " ".join(lines).lower()
+            if (
+                "hypothetical values" in full
+                and ScenarioParser._count_valid_rows(lines) >= 10
+                and ("profile income details interest crediting strategy" in full or ("owner" in full and "issue age" in full))
+            ):
+                return lines
         for lines in pages:
             full = " ".join(lines).lower()
             if "hypothetical values" in full and ScenarioParser._count_valid_rows(lines) >= 10:
