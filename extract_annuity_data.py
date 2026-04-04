@@ -277,7 +277,9 @@ class SectionParser:
         "ageat1stwithdrawal": "Income_Start_Age",
         "ageatfirstwithdrawal": "Income_Start_Age",
         "incomestartage": "Income_Start_Age",
+        "initialincomerate": "Initial_Income_Rate",
         "withdrawalrate": "Initial_Income_Rate",
+        "incomepercentage": "Income_Percentage_Increase",
         "incomepercentageincrease": "Income_Percentage_Increase",
         "guaranteedgrowthrate": "Guaranteed_Growth_Rate",
         "withdrawalfrequency": "Withdrawal_Frequency",
@@ -356,6 +358,31 @@ class SectionParser:
         for k, v in extra_income.items():
             if k not in income:
                 income[k] = v
+
+        # Fallback extraction for line-broken income fields.
+        joined = " ".join(lines)
+        if not income.get("Initial_Income_Rate"):
+            m = re.search(
+                r"Initial Income Rate:?\s*([0-9]+(?:\.[0-9]+)?%)",
+                joined,
+                flags=re.IGNORECASE,
+            )
+            if m:
+                income["Initial_Income_Rate"] = m.group(1)
+        if not income.get("Income_Percentage_Increase"):
+            m = re.search(
+                r"Income Percentage\s*([0-9]+(?:\.[0-9]+)?%)\s*Increase:?",
+                joined,
+                flags=re.IGNORECASE,
+            )
+            if not m:
+                m = re.search(
+                    r"Income Percentage Increase:?\s*([0-9]+(?:\.[0-9]+)?%)",
+                    joined,
+                    flags=re.IGNORECASE,
+                )
+            if m:
+                income["Income_Percentage_Increase"] = m.group(1)
         return profile, income, cls._parse_strategy(lines)
 
     @staticmethod
@@ -377,6 +404,8 @@ class SectionParser:
             r"^(Living Benefit)\s+(.+)$",
             r"^(Withdrawal Type)\s+(.+)$",
             r"^(Withdrawal Rate)\s+(.+)$",
+            r"^(Initial Income Rate)\s*:?\s*(.*)$",
+            r"^(Income Percentage(?: Increase)?)\s*:?\s*(.*)$",
             r"^(Age at activation(?: date)?)\s*(.*)$",
             r"^(Age at lifetime income activation)\s*(.*)$",
             r"^(Age at 1st)\s*(.*)$",
@@ -431,6 +460,10 @@ class SectionParser:
                 or lowered.startswith("profile")
                 or lowered.startswith("income details")
                 or lowered.startswith("interest crediting strategy")
+                or lowered.startswith("0% credited interest")
+                or lowered.startswith("0% index interest")
+                or lowered.startswith("specific period")
+                or lowered.startswith("assumed")
                 or lowered.startswith("step-up")
             ):
                 continue
@@ -463,6 +496,8 @@ class SectionParser:
 
             name = line[: first_metric.start()].strip(" -")
             if not name or normalize_key(name) in {"rate", "allocation", "caprateallocation"}:
+                continue
+            if normalize_key(name) in {"incomepercentage", "incomepercentageincrease", "increase"}:
                 continue
             if "fee" in name.lower():
                 continue

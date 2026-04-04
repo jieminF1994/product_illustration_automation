@@ -19045,25 +19045,21 @@
       "Living_Benefit": "Lifetime Income Builder (Single Life)",
       "Withdrawal_Type": "GLIA",
       "Income_Start_Age": "68",
-      "Initial_Income_Rate": "",
-      "Income_Percentage_Increase": "",
+      "Initial_Income_Rate": "6.00%",
+      "Income_Percentage_Increase": "0.20%",
       "Guaranteed_Growth_Rate": "2.40%"
     },
     "interest_crediting_strategy": {
       "Strategy": [
-        "Russell 2000 Annual PTP with Rate Cap",
-        "Income Percentage"
+        "Russell 2000 Annual PTP with Rate Cap"
       ],
       "Rate": [
-        "5.75%",
-        "0.20%"
+        "5.75%"
       ],
       "Allocation": [
-        "100%",
-        "0%"
+        "100%"
       ],
       "Participation_Rate": [
-        "",
         ""
       ]
     },
