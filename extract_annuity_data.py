@@ -364,14 +364,6 @@ class SectionParser:
 
         # Fallback extraction for line-broken income fields.
         joined = " ".join(lines)
-        if not income.get("Initial_Income_Rate"):
-            m = re.search(
-                r"Initial Income Rate:?\s*([0-9]+(?:\.[0-9]+)?%)",
-                joined,
-                flags=re.IGNORECASE,
-            )
-            if m:
-                income["Initial_Income_Rate"] = m.group(1)
         if not income.get("Income_Percentage_Increase"):
             m = re.search(
                 r"Income Percentage\s*([0-9]+(?:\.[0-9]+)?%)\s*Increase:?",
