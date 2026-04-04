@@ -104,6 +104,10 @@ def canonical_column_name(raw_name: str) -> str:
         return "Guaranteed_Lifetime_Income_Amount"
     if "withdrawal amount" in lowered:
         return "Withdrawal_Amount"
+    if "guaranteed return of premium grop" in lowered:
+        return "Guaranteed_Return_of_Premium_GROP"
+    if "overlay value" in lowered:
+        return "Overlay_Value"
     if "income credit" in lowered:
         return "Income_Credit"
     if "cumulative withdrawal" in lowered:
@@ -672,6 +676,8 @@ class ScenarioParser:
             (r"credited interest rate", "Credited Interest Rate"),
             (r"interest earned", "Interest Earned"),
             (r"withdrawal amount", "Withdrawal Amount"),
+            (r"guaranteed return of premium grop", "Guaranteed Return of Premium GROP"),
+            (r"overlay value", "Overlay Value"),
             (r"contract s anniversary value|contract anniversary value", "Contract Anniversary Value"),
             (r"minimum accumulation value", "Minimum Accumulation Value"),
             (r"cash surrender value", "Cash Surrender Value"),
