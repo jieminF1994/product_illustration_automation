@@ -2,18 +2,19 @@
 """
 Extract annuity illustration data from PDF files into product_structure JSON.
 
-This script uses macOS PDFKit (via a tiny Objective-C helper binary) to read PDF
-text without third-party Python dependencies.
+PDF text extraction backends:
+- pure Python via pypdf / PyPDF2 (cross-platform)
+- macOS PDFKit helper binary fallback
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -178,6 +179,78 @@ class PDFKitTextExtractor:
             lines = [line for line in lines if line]
             pages.append(lines)
         return pages
+
+
+class PythonPDFTextExtractor:
+    def __init__(self, backend: str = "auto") -> None:
+        self.backend = backend
+        self.engine_name = ""
+        self.reader_cls = self._load_reader()
+
+    def _load_reader(self):
+        if self.backend in {"auto", "pypdf"}:
+            try:
+                from pypdf import PdfReader  # type: ignore
+
+                self.engine_name = "pypdf"
+                return PdfReader
+            except Exception:
+                if self.backend == "pypdf":
+                    raise
+        if self.backend in {"auto", "pypdf2"}:
+            try:
+                from PyPDF2 import PdfReader  # type: ignore
+
+                self.engine_name = "PyPDF2"
+                return PdfReader
+            except Exception:
+                if self.backend == "pypdf2":
+                    raise
+        raise RuntimeError(
+            "No Python PDF reader available. Install 'pypdf' (recommended) or 'PyPDF2'."
+        )
+
+    def extract_pages(self, pdf_path: Path) -> List[List[str]]:
+        reader = self.reader_cls(str(pdf_path))
+        pages: List[List[str]] = []
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            lines = [normalize_text(line) for line in text.splitlines()]
+            lines = [line for line in lines if line]
+            pages.append(lines)
+        return pages
+
+
+def build_text_extractor(
+    backend: str = "auto", helper_dir: Optional[Path] = None
+):
+    backend = backend.lower().strip()
+    errors: List[str] = []
+
+    if backend in {"auto", "pypdf", "pypdf2"}:
+        try:
+            python_backend = "auto" if backend == "auto" else backend
+            return PythonPDFTextExtractor(backend=python_backend)
+        except Exception as exc:
+            errors.append(f"python extractor: {exc}")
+            if backend in {"pypdf", "pypdf2"}:
+                raise RuntimeError("; ".join(errors))
+
+    if backend in {"auto", "pdfkit"}:
+        if sys.platform != "darwin":
+            msg = "pdfkit backend is only supported on macOS."
+            errors.append(msg)
+            if backend == "pdfkit":
+                raise RuntimeError(msg)
+        else:
+            temp_root = helper_dir or (Path(tempfile.gettempdir()) / "annuity_pdf_helper")
+            return PDFKitTextExtractor(helper_dir=temp_root)
+
+    raise RuntimeError(
+        "Could not initialize any PDF extractor backend. "
+        + " | ".join(errors)
+        + " | On Windows/Linux: pip install pypdf"
+    )
 
 
 class SectionParser:
@@ -780,11 +853,17 @@ class ScenarioParser:
 
 
 class AnnuityExtractorPipeline:
-    def __init__(self, pdf_dir: Path, output_json: Path, drop_file: Path) -> None:
+    def __init__(
+        self,
+        pdf_dir: Path,
+        output_json: Path,
+        drop_file: Path,
+        extractor_backend: str = "auto",
+    ) -> None:
         self.pdf_dir = pdf_dir
         self.output_json = output_json
         self.drop_file = drop_file
-        self.text_extractor = PDFKitTextExtractor(helper_dir=Path("/tmp/annuity_pdf_helper"))
+        self.text_extractor = build_text_extractor(backend=extractor_backend)
         self.scenario_parser = ScenarioParser()
 
     def run(self) -> Tuple[Dict[str, dict], List[str]]:
@@ -866,16 +945,31 @@ def parse_args() -> argparse.Namespace:
         default=Path("drop_pdf"),
         help="Output text file for unmatched PDFs.",
     )
+    parser.add_argument(
+        "--pdf-extractor",
+        choices=["auto", "pypdf", "pypdf2", "pdfkit"],
+        default="auto",
+        help="PDF text extraction backend. 'auto' prefers pypdf/PyPDF2 and falls back to macOS pdfkit.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    pipeline = AnnuityExtractorPipeline(
-        pdf_dir=args.pdf_dir,
-        output_json=args.output_json,
-        drop_file=args.drop_file,
-    )
+    try:
+        pipeline = AnnuityExtractorPipeline(
+            pdf_dir=args.pdf_dir,
+            output_json=args.output_json,
+            drop_file=args.drop_file,
+            extractor_backend=args.pdf_extractor,
+        )
+    except RuntimeError as exc:
+        print(f"Error initializing PDF extractor: {exc}", file=sys.stderr)
+        print(
+            "Tip: On Windows/Linux install pypdf with `pip install pypdf` and use `--pdf-extractor auto`.",
+            file=sys.stderr,
+        )
+        return 2
     _, dropped = pipeline.run()
     print(f"Completed. drop_pdf count: {len(dropped)}")
     return 0
