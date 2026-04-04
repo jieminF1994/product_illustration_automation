@@ -278,7 +278,7 @@ class SectionParser:
         "ageatfirstwithdrawal": "Income_Start_Age",
         "incomestartage": "Income_Start_Age",
         "initialincomerate": "Initial_Income_Rate",
-        "withdrawalrate": "Initial_Income_Rate",
+        "withdrawalrate": "Withdrawal_Rate",
         "incomepercentage": "Income_Percentage_Increase",
         "incomepercentageincrease": "Income_Percentage_Increase",
         "guaranteedgrowthrate": "Guaranteed_Growth_Rate",
@@ -300,6 +300,9 @@ class SectionParser:
         income = {
             "Living_Benefit": "",
             "Withdrawal_Type": "",
+            "Withdrawal_Rate": "",
+            "Withdrawal_Frequency": "",
+            "Annual_Rider_Fee": "",
             "Income_Start_Age": "",
             "Initial_Income_Rate": "",
             "Income_Percentage_Increase": "",
@@ -383,6 +386,22 @@ class SectionParser:
                 )
             if m:
                 income["Income_Percentage_Increase"] = m.group(1)
+        if not income.get("Withdrawal_Frequency"):
+            m = re.search(
+                r"Withdrawal(?:\s+[A-Za-z]+)?\s+Frequency:?\s*([A-Za-z]+)",
+                joined,
+                flags=re.IGNORECASE,
+            )
+            if m:
+                income["Withdrawal_Frequency"] = m.group(1)
+        if not income.get("Annual_Rider_Fee"):
+            m = re.search(
+                r"Annual\s+rider\s+fee:?\s*([0-9]+(?:\.[0-9]+)?%)",
+                joined,
+                flags=re.IGNORECASE,
+            )
+            if m:
+                income["Annual_Rider_Fee"] = m.group(1)
         return profile, income, cls._parse_strategy(lines)
 
     @staticmethod
@@ -404,6 +423,8 @@ class SectionParser:
             r"^(Living Benefit)\s+(.+)$",
             r"^(Withdrawal Type)\s+(.+)$",
             r"^(Withdrawal Rate)\s+(.+)$",
+            r"^(Withdrawal Frequency)\s*:?\s*(.*)$",
+            r"^(Annual rider fee)\s*:?\s*(.*)$",
             r"^(Initial Income Rate)\s*:?\s*(.*)$",
             r"^(Income Percentage(?: Increase)?)\s*:?\s*(.*)$",
             r"^(Age at activation(?: date)?)\s*(.*)$",

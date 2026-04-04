@@ -11,8 +11,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "6.10%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "50",
-      "Initial_Income_Rate": "6.10%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -1608,8 +1611,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Joint Life)",
       "Withdrawal_Type": "Specified Amount",
+      "Withdrawal_Rate": "6.65%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "70",
-      "Initial_Income_Rate": "6.65%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -3205,8 +3211,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Choice (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "6.00%",
+      "Withdrawal_Frequency": "",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "60",
-      "Initial_Income_Rate": "6.00%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": "",
       "Income_Option": "Level Income"
@@ -4737,8 +4746,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "5.65%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "50",
-      "Initial_Income_Rate": "5.65%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -6342,8 +6354,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Life)",
       "Withdrawal_Type": "Specified Amount",
+      "Withdrawal_Rate": "6.60%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "62",
-      "Initial_Income_Rate": "6.60%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -7869,8 +7884,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Joint Life)",
       "Withdrawal_Type": "Specified Amount",
+      "Withdrawal_Rate": "7.10%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "70",
-      "Initial_Income_Rate": "7.10%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -9396,8 +9414,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Joint Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "6.25%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "67",
-      "Initial_Income_Rate": "6.25%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -11055,8 +11076,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "5.35%",
+      "Withdrawal_Frequency": "",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "50",
-      "Initial_Income_Rate": "5.35%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -12726,8 +12750,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "5.65%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "50",
-      "Initial_Income_Rate": "5.65%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -14257,8 +14284,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "6.10%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "50",
-      "Initial_Income_Rate": "6.10%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -15854,8 +15884,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "7.15%",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "1.00%",
       "Income_Start_Age": "70",
-      "Initial_Income_Rate": "7.15%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -17447,8 +17480,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Max (Single Strategy Participation Rate Rate Allocation % Life) S&P Annual PTP Participation Rate 30% N/A 50%",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "7.80%",
+      "Withdrawal_Frequency": "",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "72",
-      "Initial_Income_Rate": "7.80%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -19044,6 +19080,9 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Builder (Single Life)",
       "Withdrawal_Type": "GLIA",
+      "Withdrawal_Rate": "",
+      "Withdrawal_Frequency": "",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "68",
       "Initial_Income_Rate": "6.00%",
       "Income_Percentage_Increase": "0.20%",
@@ -20075,6 +20114,9 @@
     "income_details": {
       "Living_Benefit": "None",
       "Withdrawal_Type": "Available Free Out",
+      "Withdrawal_Rate": "",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "55",
       "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
@@ -22248,8 +22290,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Joint Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "6.10%",
+      "Withdrawal_Frequency": "",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "67",
-      "Initial_Income_Rate": "6.10%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -24241,8 +24286,11 @@
     "income_details": {
       "Living_Benefit": "Lifetime Income Plus Multiplier Flex (Single Life)",
       "Withdrawal_Type": "GMWB",
+      "Withdrawal_Rate": "7.50%",
+      "Withdrawal_Frequency": "",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "70",
-      "Initial_Income_Rate": "7.50%",
+      "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
       "Guaranteed_Growth_Rate": ""
     },
@@ -26209,6 +26257,9 @@
     "income_details": {
       "Living_Benefit": "None Participation",
       "Withdrawal_Type": "None Strategy",
+      "Withdrawal_Rate": "",
+      "Withdrawal_Frequency": "",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "",
       "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
@@ -28198,6 +28249,9 @@
     "income_details": {
       "Living_Benefit": "None",
       "Withdrawal_Type": "Specified Amount",
+      "Withdrawal_Rate": "",
+      "Withdrawal_Frequency": "Annual",
+      "Annual_Rider_Fee": "",
       "Income_Start_Age": "67",
       "Initial_Income_Rate": "",
       "Income_Percentage_Increase": "",
