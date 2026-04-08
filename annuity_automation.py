@@ -14,16 +14,15 @@ which uses xlwings to open/recalc/save each workbook for all 3 scenarios.
 
 Usage
 -----
-  # Phase 1 — populate
-  python annuity_automation.py --template TEMPLATE.xlsx \
-      --json product_structure.json --output-dir ./excel_test_cases --phases 1
+  # Run all phases in one submission. By default the template/json are read
+  # from the parent folder and results are written under ../results/YYYY-MM-DD/.
+  python annuity_automation.py --phases 1 2 3
 
-  # recalc (requires Excel + xlwings on Windows/Mac)
-  python ./excel_test_cases/recalc_helper.py ./excel_test_cases
+  # Run only selected PDF test cases
+  python annuity_automation.py --phases 1 2 3 \
+      --test-cases "Example 1.pdf" "Example 2.pdf"
 
-  # Phase 2 & 3 — gather + compare
-  python annuity_automation.py --template TEMPLATE.xlsx \
-      --json product_structure.json --output-dir ./excel_test_cases --phases 2 3
+  # Run from an IDE by setting values in config = { ... } and executing the file
 """
 
 from __future__ import annotations
@@ -31,13 +30,16 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import datetime as dt
 import json
 import logging
 import os
 import re
 import shutil
 import string
+import subprocess
 import sys
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +58,25 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger(__name__)
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_PARENT_DIR = SCRIPT_DIR.parent
+DEFAULT_TEMPLATE_PATH = PROJECT_PARENT_DIR / "Index Annuity Hypo Illustrations Tool_v1.47 try.xlsx"
+DEFAULT_JSON_PATH = PROJECT_PARENT_DIR / "product_structure.json"
+DEFAULT_RESULTS_ROOT = PROJECT_PARENT_DIR / "results"
+DEFAULT_PHASES = [1, 2, 3]
+VALID_PHASES = {1, 2, 3}
+
+# IDE entrypoint configuration.
+# Fill values here and run the script directly from your IDE when desired.
+config: dict[str, Any] = {
+    # "template": str(DEFAULT_TEMPLATE_PATH),
+    # "json": str(DEFAULT_JSON_PATH),
+    # "phases": [1, 2, 3],
+    # "test_cases": ["Example 1.pdf", "Example 2.pdf"],
+    # "results_root": str(DEFAULT_RESULTS_ROOT),
+    # "output_dir": "/absolute/path/to/existing/run_folder",
+}
 
 # ---------------------------------------------------------------------------
 # openpyxl compatibility (Strict OOXML .xlsx -> Transitional OOXML namespaces)
@@ -1070,13 +1091,16 @@ class OutputComparator:
 
 RECALC_HELPER = '''"""
 recalc_helper.py  —  uses xlwings to open, switch scenario, recalculate and save
-each workbook in the excel_test_cases folder.
+each workbook in the output folder.
 
 Usage:
     python recalc_helper.py ./excel_test_cases
+    python recalc_helper.py ./excel_test_cases "example.pdf.xlsx" "another.pdf.xlsx"
 """
+import shutil
 import sys
 import time
+import uuid
 from pathlib import Path
 
 try:
@@ -1115,15 +1139,64 @@ def _configure_app(app):
     except Exception:
         pass
 
-def recalc_workbook(app, xl_path: Path):
+def _resolve_requested_workbooks(folder: Path, requested: list[str]) -> list[Path]:
+    if not requested:
+        return sorted(folder.glob("*.xlsx"))
+
+    resolved = []
+    missing = []
+    for name in requested:
+        raw_name = Path(name).name
+        candidates = []
+        if raw_name.lower().endswith(".xlsx"):
+            candidates.append(folder / raw_name)
+        else:
+            candidates.append(folder / f"{raw_name}.xlsx")
+            candidates.append(folder / raw_name)
+
+        workbook_path = next((candidate for candidate in candidates if candidate.exists()), None)
+        if workbook_path is None:
+            missing.append(raw_name)
+            continue
+        resolved.append(workbook_path)
+
+    if missing:
+        print("Requested workbook(s) not found:", ", ".join(missing))
+        sys.exit(1)
+
+    return resolved
+
+def _excel_staging_root() -> Path:
+    candidates = [
+        Path.home() / "Library/Containers/com.microsoft.Excel/Data/Documents",
+        Path.home() / "Library/Group Containers/UBF8T346G9.Office",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            root = candidate / "product_illustration_automation_recalc"
+            root.mkdir(parents=True, exist_ok=True)
+            return root
+    raise RuntimeError(
+        "Could not locate an Excel sandbox-safe staging folder. "
+        "Expected one of: ~/Library/Containers/com.microsoft.Excel/Data/Documents "
+        "or ~/Library/Group Containers/UBF8T346G9.Office"
+    )
+
+def _prepare_staged_copy(original_path: Path, staging_dir: Path) -> Path:
+    staged_path = staging_dir / original_path.name
+    shutil.copy2(original_path, staged_path)
+    return staged_path
+
+def recalc_workbook(app, xl_path: Path, staging_dir: Path):
     print(f"[recalc] Opening {xl_path.name} ...")
     wb = None
+    staged_path = _prepare_staged_copy(xl_path, staging_dir)
     try:
         # update_links=False avoids repeated "update links/grant access" prompts
         # when files contain references.
         try:
             wb = app.books.open(
-                str(xl_path.resolve()),
+                str(staged_path.resolve()),
                 update_links=False,
                 read_only=False,
                 notify=False,
@@ -1131,7 +1204,7 @@ def recalc_workbook(app, xl_path: Path):
             )
         except TypeError:
             # Older xlwings builds may not support all kwargs.
-            wb = app.books.open(str(xl_path.resolve()))
+            wb = app.books.open(str(staged_path.resolve()))
 
         for scenario_key, excel_val in SCENARIOS.items():
             print(f"  scenario={scenario_key} ({excel_val})")
@@ -1150,25 +1223,34 @@ def recalc_workbook(app, xl_path: Path):
         wb.app.calculate()
         time.sleep(2)
         wb.save()
+        shutil.copy2(staged_path, xl_path)
         print(f"  Saved {xl_path.name}")
     finally:
         if wb is not None:
             wb.close()
+        try:
+            staged_path.unlink()
+        except FileNotFoundError:
+            pass
 
 if __name__ == "__main__":
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
-    xlsx_files = sorted(folder.glob("*.xlsx"))
+    requested_workbooks = sys.argv[2:]
+    xlsx_files = _resolve_requested_workbooks(folder, requested_workbooks)
     if not xlsx_files:
         print(f"No .xlsx files found in {folder}")
         sys.exit(1)
 
     app = xw.App(visible=False, add_book=False)
     _configure_app(app)
+    staging_dir = _excel_staging_root() / f"run_{folder.name}_{uuid.uuid4().hex[:8]}"
+    staging_dir.mkdir(parents=True, exist_ok=True)
     try:
         for f in xlsx_files:
-            recalc_workbook(app, f)
+            recalc_workbook(app, f, staging_dir)
     finally:
         app.quit()
+        shutil.rmtree(staging_dir, ignore_errors=True)
     print("Done.")
 '''
 
@@ -1185,15 +1267,148 @@ def save_json(data: dict, path: Path):
         json.dump(data, fh, indent=2, default=str)
     log.info("Saved %s", path)
 
-def save_csv(records: list[dict], path: Path):
-    if not records:
+def save_csv(records: list[dict], path: Path, fieldnames: list[str] | None = None):
+    if not records and not fieldnames:
         log.info("No records to write for %s", path)
         return
     with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(records[0].keys()))
+        writer = csv.DictWriter(fh, fieldnames=fieldnames or list(records[0].keys()))
         writer.writeheader()
-        writer.writerows(records)
+        if records:
+            writer.writerows(records)
     log.info("Saved %s (%d rows)", path, len(records))
+
+def _resolve_input_path(raw_value: str | Path | None, default_path: Path) -> Path:
+    if raw_value in (None, ""):
+        return default_path
+
+    path = Path(raw_value).expanduser()
+    if path.is_absolute():
+        return path
+
+    candidates = [
+        Path.cwd() / path,
+        SCRIPT_DIR / path,
+        PROJECT_PARENT_DIR / path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+def _resolve_output_path(raw_value: str | Path | None) -> Path | None:
+    if raw_value in (None, ""):
+        return None
+
+    path = Path(raw_value).expanduser()
+    if path.is_absolute():
+        return path
+    return (Path.cwd() / path).resolve()
+
+def _normalize_test_case_values(raw_value: Any) -> list[str]:
+    if raw_value in (None, "", []):
+        return []
+
+    if isinstance(raw_value, str):
+        parts = [part.strip() for part in raw_value.split(",")]
+        return [part for part in parts if part]
+
+    if isinstance(raw_value, (list, tuple, set)):
+        normalized = []
+        for item in raw_value:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return normalized
+
+    text = str(raw_value).strip()
+    return [text] if text else []
+
+def _test_case_aliases(name: str) -> set[str]:
+    path_name = Path(name).name
+    aliases = {
+        name.casefold(),
+        path_name.casefold(),
+        Path(name).stem.casefold(),
+        Path(path_name).stem.casefold(),
+    }
+    return {alias for alias in aliases if alias}
+
+def filter_product_structure(product_structure: dict, requested_cases: list[str]) -> dict:
+    if not requested_cases:
+        return product_structure
+
+    alias_to_actual: dict[str, str] = {}
+    for actual_name in product_structure:
+        for alias in _test_case_aliases(actual_name):
+            alias_to_actual.setdefault(alias, actual_name)
+
+    filtered: dict[str, Any] = {}
+    missing: list[str] = []
+
+    for requested in requested_cases:
+        actual_name = None
+        for alias in _test_case_aliases(requested):
+            actual_name = alias_to_actual.get(alias)
+            if actual_name:
+                break
+        if not actual_name:
+            missing.append(requested)
+            continue
+        filtered[actual_name] = product_structure[actual_name]
+
+    if missing:
+        raise ValueError(
+            "Requested test case(s) not found in product_structure.json: "
+            + ", ".join(missing)
+        )
+
+    return filtered
+
+def normalize_phases(raw_phases: Any) -> list[int]:
+    phases = raw_phases if raw_phases not in (None, []) else DEFAULT_PHASES
+    normalized = [int(phase) for phase in phases]
+    invalid = [phase for phase in normalized if phase not in VALID_PHASES]
+    if invalid:
+        raise ValueError(f"Unsupported phase(s): {invalid}. Valid values are 1, 2, 3.")
+    return normalized
+
+def create_run_output_dir(results_root: Path) -> tuple[Path, str]:
+    run_date = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
+    valuation_id = f"valuation_{dt.datetime.now().astimezone().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    output_dir = results_root / run_date / valuation_id
+    output_dir.mkdir(parents=True, exist_ok=False)
+    return output_dir, valuation_id
+
+def write_run_manifest(
+    output_dir: Path,
+    workbook_dir: Path,
+    valuation_id: str,
+    template_path: Path,
+    json_path: Path,
+    phases: list[int],
+    requested_cases: list[str],
+):
+    manifest = {
+        "submitted_at": dt.datetime.now().astimezone().isoformat(),
+        "valuation_id": valuation_id,
+        "template_path": str(template_path),
+        "json_path": str(json_path),
+        "phases": phases,
+        "test_cases": requested_cases,
+        "output_dir": str(output_dir),
+        "workbook_dir": str(workbook_dir),
+    }
+    save_json(manifest, output_dir / "run_config.json")
+
+def run_recalc_helper(recalc_path: Path, workbook_dir: Path, workbook_names: list[str]):
+    cmd = [sys.executable, str(recalc_path), str(workbook_dir)]
+    cmd.extend(workbook_names)
+    log.info("===== RECALCULATION: Recalculate workbooks =====")
+    log.info("Running: %s", " ".join(cmd))
+    subprocess.run(cmd, check=True)
 
 def run_phase1(template_path: Path, product_structure: dict, output_dir: Path) -> list[dict]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1231,19 +1446,91 @@ def run_phase3(tool_output: dict, product_structure: dict) -> list[dict]:
     comparator = OutputComparator(tool_output, product_structure)
     return comparator.compare()
 
-def main():
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Annuity Automation Script")
-    ap.add_argument("--template", required=True, help="Path to template .xlsx")
-    ap.add_argument("--json", required=True, help="Path to product_structure.json")
-    ap.add_argument("--output-dir", default="./excel_test_cases",
-                    help="Folder for output workbooks (default: ./excel_test_cases)")
-    ap.add_argument("--phases", nargs="+", type=int, default=[1, 2, 3],
+    ap.add_argument("--template", help="Path to template .xlsx")
+    ap.add_argument("--json", help="Path to product_structure.json")
+    ap.add_argument("--output-dir",
+                    help="Folder for this run's output files. If omitted, a dated valuation folder is created under results/.")
+    ap.add_argument("--results-root",
+                    help="Base results folder for auto-created dated valuation folders "
+                         f"(default: {DEFAULT_RESULTS_ROOT})")
+    ap.add_argument("--phases", nargs="+", type=int,
                     help="Which phases to run: 1, 2, 3 (default: all)")
-    args = ap.parse_args()
+    ap.add_argument("--test-cases", nargs="+",
+                    help="Run only the specified PDF test case names. Accepts one or more file names.")
+    return ap.parse_args(argv)
 
-    template_path = Path(args.template)
-    json_path = Path(args.json)
-    output_dir = Path(args.output_dir)
+def build_runtime_settings(args: argparse.Namespace, runtime_config: dict[str, Any] | None) -> dict[str, Any]:
+    runtime_config = runtime_config or {}
+    cli_values = {
+        "template": args.template,
+        "json": args.json,
+        "output_dir": args.output_dir,
+        "results_root": args.results_root,
+        "phases": args.phases,
+        "test_cases": args.test_cases,
+    }
+
+    merged: dict[str, Any] = {}
+    merged.update(runtime_config)
+    for key, value in cli_values.items():
+        if value is not None:
+            merged[key] = value
+
+    template_path = _resolve_input_path(merged.get("template"), DEFAULT_TEMPLATE_PATH)
+    json_path = _resolve_input_path(merged.get("json"), DEFAULT_JSON_PATH)
+    explicit_output_dir = _resolve_output_path(merged.get("output_dir"))
+    results_root = _resolve_output_path(merged.get("results_root")) or DEFAULT_RESULTS_ROOT
+    phases = normalize_phases(merged.get("phases"))
+    requested_cases = _normalize_test_case_values(merged.get("test_cases"))
+
+    if explicit_output_dir is None and 1 not in phases and any(phase in phases for phase in (2, 3)):
+        raise ValueError(
+            "When running phase 2 and/or 3 without phase 1, please provide --output-dir "
+            "or config['output_dir'] for an existing run folder."
+        )
+
+    if explicit_output_dir is None:
+        output_dir, valuation_id = create_run_output_dir(results_root)
+    else:
+        output_dir = explicit_output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        valuation_id = output_dir.name
+
+    workbook_dir = output_dir / "excel_test_cases"
+    if explicit_output_dir is not None and not workbook_dir.exists():
+        existing_root_workbooks = list(output_dir.glob("*.xlsx"))
+        if existing_root_workbooks:
+            workbook_dir = output_dir
+
+    return {
+        "template_path": template_path,
+        "json_path": json_path,
+        "output_dir": output_dir,
+        "workbook_dir": workbook_dir,
+        "results_root": results_root,
+        "phases": phases,
+        "test_cases": requested_cases,
+        "valuation_id": valuation_id,
+    }
+
+def main(runtime_config: dict[str, Any] | None = None):
+    args = parse_args()
+
+    try:
+        settings = build_runtime_settings(args, runtime_config if runtime_config is not None else config)
+    except ValueError as exc:
+        log.error("%s", exc)
+        sys.exit(1)
+
+    template_path = settings["template_path"]
+    json_path = settings["json_path"]
+    output_dir = settings["output_dir"]
+    workbook_dir = settings["workbook_dir"]
+    phases = settings["phases"]
+    requested_cases = settings["test_cases"]
+    valuation_id = settings["valuation_id"]
 
     if not template_path.exists():
         log.error("Template file not found: %s", template_path)
@@ -1253,37 +1540,62 @@ def main():
         sys.exit(1)
 
     product_structure = load_json(json_path)
+    try:
+        product_structure = filter_product_structure(product_structure, requested_cases)
+    except ValueError as exc:
+        log.error("%s", exc)
+        sys.exit(1)
+
+    workbook_names = [f"{pdf_name}.xlsx" for pdf_name in product_structure]
     all_errors: list[dict] = []
     tool_output: dict = {}
 
-    # Write recalc helper alongside the output folder
-    recalc_path = output_dir / "recalc_helper.py"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    log.info("Run output directory: %s", output_dir)
+    log.info("Workbook directory: %s", workbook_dir)
+    log.info("Valuation ID: %s", valuation_id)
+    if requested_cases:
+        log.info("Selected test case(s): %s", ", ".join(product_structure.keys()))
+
+    write_run_manifest(
+        output_dir=output_dir,
+        workbook_dir=workbook_dir,
+        valuation_id=valuation_id,
+        template_path=template_path,
+        json_path=json_path,
+        phases=phases,
+        requested_cases=list(product_structure.keys()),
+    )
+
+    recalc_path = workbook_dir / "recalc_helper.py"
+    workbook_dir.mkdir(parents=True, exist_ok=True)
     recalc_path.write_text(RECALC_HELPER, encoding="utf-8")
     log.info("recalc_helper.py written to %s", recalc_path)
 
-    if 1 in args.phases:
+    if 1 in phases:
         log.info("===== PHASE 1: Populate workbooks =====")
-        errs = run_phase1(template_path, product_structure, output_dir)
+        errs = run_phase1(template_path, product_structure, workbook_dir)
         all_errors.extend(errs)
-
-        # Number the error rows sequentially
         for i, rec in enumerate(all_errors, 1):
             rec["number"] = i
-
-        save_csv(all_errors, output_dir / "error_report.csv")
+        save_csv(all_errors, output_dir / "error_report.csv",
+                 fieldnames=["number", "test_case", "error_message"])
         log.info("Phase 1 complete. %d error(s) logged.", len(all_errors))
-        log.info("")
-        log.info("NEXT STEP: Run recalc_helper.py to recalculate all workbooks:")
-        log.info("  python %s", recalc_path)
 
-    if 2 in args.phases:
+    if 1 in phases and any(phase in phases for phase in (2, 3)):
+        try:
+            run_recalc_helper(recalc_path, workbook_dir, workbook_names)
+        except subprocess.CalledProcessError as exc:
+            log.error("Recalculation failed with exit code %s", exc.returncode)
+            log.error("You can retry manually with: python %s %s", recalc_path, workbook_dir)
+            sys.exit(exc.returncode or 1)
+
+    if 2 in phases:
         log.info("===== PHASE 2: Gather outputs =====")
-        tool_output, gather_errors = run_phase2(output_dir, product_structure)
+        tool_output, gather_errors = run_phase2(workbook_dir, product_structure)
         all_errors.extend(gather_errors)
         save_json(tool_output, output_dir / "tool_calc_output.json")
 
-    if 3 in args.phases:
+    if 3 in phases:
         log.info("===== PHASE 3: Compare outputs =====")
         if not tool_output:
             tool_calc_path = output_dir / "tool_calc_output.json"
@@ -1294,13 +1606,14 @@ def main():
                 sys.exit(1)
 
         check_records = run_phase3(tool_output, product_structure)
-        save_csv(check_records, output_dir / "check_report.csv")
+        save_csv(check_records, output_dir / "check_report.csv",
+                 fieldnames=["number", "test_case", "scenario", "message"])
         log.info("Phase 3 complete. %d check record(s).", len(check_records))
 
-    # Final error report
     for i, rec in enumerate(all_errors, 1):
         rec["number"] = i
-    save_csv(all_errors, output_dir / "error_report.csv")
+    save_csv(all_errors, output_dir / "error_report.csv",
+             fieldnames=["number", "test_case", "error_message"])
     log.info("All done.")
 
 
