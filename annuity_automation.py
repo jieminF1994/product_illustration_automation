@@ -1435,6 +1435,10 @@ SCENARIOS = {
     "constant_growth": "Constant Growth",
 }
 
+def _app_visible_default() -> bool:
+    # Excel startup on Windows is often more reliable when the app is visible.
+    return sys.platform.startswith("win")
+
 def _configure_app(app):
     # Reduce UI prompts during batch automation.
     try:
@@ -1570,8 +1574,9 @@ if __name__ == "__main__":
         print(f"No .xlsx files found in {folder}", flush=True)
         sys.exit(1)
 
-    print("[recalc] Starting Excel app ...", flush=True)
-    app = xw.App(visible=False, add_book=False)
+    visible = _app_visible_default()
+    print(f"[recalc] Starting Excel app ... visible={visible}", flush=True)
+    app = xw.App(visible=visible, add_book=False)
     _configure_app(app)
     print("[recalc] Excel app ready.", flush=True)
     staging_dir = _excel_staging_root() / f"run_{folder.name}_{uuid.uuid4().hex[:8]}"
