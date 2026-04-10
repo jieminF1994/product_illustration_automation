@@ -273,22 +273,26 @@ STRATEGY_MAP: dict[str, str] = {
     # S&P 500 par rate
     "S&P Annual PTP with ParRate":                   "1-Year PTP with ParRate, S&P 500",
     "1-Year PTP with ParRate, S&P 500":              "1-Year PTP with ParRate, S&P 500",
+    "S&P Annual PTP Participation Rate":             "1-Year PTP with ParRate, S&P 500",
     # PIMCO
     "PIMCO Annual PTP with Cap":                     "1-Year PTP with Cap, PIMCO Global Optima",
     "1-Year PTP with Cap, PIMCO Global Optima":      "1-Year PTP with Cap, PIMCO Global Optima",
     "PIMCO Global Optima PTP Cap":                   "1-Year PTP with Cap, PIMCO Global Optima",
     "PIMCO Annual PTP with ParRate":                 "1-Year PTP with ParRate, PIMCO Global Optima",
     "1-Year PTP with ParRate, PIMCO Global Optima":  "1-Year PTP with ParRate, PIMCO Global Optima",
+    "PIMCO Annual PTP Participation Rate":           "1-Year PTP with ParRate, PIMCO Global Optima",
     # MLSB
     "MLSB Annual PTP with ParRate":                  "1-Year PTP with ParRate, MLSB",
     "1-Year PTP with ParRate, MLSB":                 "1-Year PTP with ParRate, MLSB",
     "MLSB Annual PTP with Cap":                      "1-Year PTP with Cap, MLSB",
+    "MLSB Annual PTP Participation Rate":            "1-Year PTP with ParRate, MLSB",
     # Franklin
     "Franklin Annual PTP with ParRate":              "1-Year PTP with ParRate, Franklin",
     "1-Year PTP with ParRate, Franklin":             "1-Year PTP with ParRate, Franklin",
     # Russell
     "Russell 2000 Annual PTP with Cap":              "1-Year PTP with Cap, Russell 2000",
     "1-Year PTP with Cap, Russell 2000":             "1-Year PTP with Cap, Russell 2000",
+    "Russell 2000 Annual PTP with Rate Cap":         "1-Year PTP with Cap, Russell 2000",
     # MSCI
     "MSCI Annual PTP with Cap":                      "1-Year PTP with Cap, MSCI",
     "1-Year PTP with Cap, MSCI":                     "1-Year PTP with Cap, MSCI",
@@ -298,6 +302,8 @@ STRATEGY_MAP: dict[str, str] = {
     # Performance-triggered
     "1-Year Performance-Triggered Account, S&P 500": "1-Year Performance-Triggered Account, S&P 500",
     "S&P Performance Triggered":                     "1-Year Performance-Triggered Account, S&P 500",
+    "S&P Annual PTP Performance-Triggered":          "1-Year Performance-Triggered Account, S&P 500",
+    "Triggered":                                     "1-Year Performance-Triggered Account, S&P 500",
 }
 
 # JSON Living Benefit  →  Excel LivBen value
@@ -484,16 +490,117 @@ class TestCaseParser:
         self.errors.append(msg)
         log.warning("[%s] %s", self.pdf_name, msg)
 
+    def _has_living_benefit(self, raw_lb: Any) -> bool:
+        val = str(raw_lb or "").strip().lower()
+        return bool(val) and "none" not in val
+
+    def _product_with_income_variant(self, raw_product: str, raw_lb: Any) -> str:
+        if not raw_product or not self._has_living_benefit(raw_lb):
+            return raw_product
+
+        product_lower = raw_product.lower()
+        if any(token in product_lower for token in ("plus income", "advisory income", "with lib", "max income", "level income")):
+            return raw_product
+
+        candidates = [
+            f"{raw_product} Plus Income",
+            f"{raw_product} with LIB",
+        ]
+        if re.search(r"(?i)\bplus\b", raw_product) and "plus income" not in product_lower:
+            candidates.append(re.sub(r"(?i)\bplus\b", "Plus Income", raw_product, count=1))
+        if "advisory" in raw_product.lower() and "income" not in raw_product.lower():
+            candidates.append(re.sub(r"advisory", "Advisory Income", raw_product, flags=re.IGNORECASE))
+
+        for candidate in candidates:
+            if candidate in PRODUCT_MAP:
+                log.info(
+                    "[%s] Adjusting product from '%s' to '%s' because living benefit is present",
+                    self.pdf_name,
+                    raw_product,
+                    candidate,
+                )
+                return candidate
+
+        return raw_product
+
+    def _strategy_records(self, ics: Any) -> list[tuple[str, dict[str, Any]]]:
+        """
+        Normalize interest_crediting_strategy payloads into
+        [(strategy_name, strategy_details_dict), ...].
+
+        Supported shapes:
+        - {"Strategy A": {"Allocation": "...", "Cap": "..."}, ...}
+        - {
+              "Strategy": ["Strategy A", "Strategy B"],
+              "Allocation": ["50%", "50%"],
+              "Rate": ["5.00%", "N/A"],
+              ...
+          }
+        - [{"Strategy": "Strategy A", ...}, ...]
+        """
+        if not ics:
+            return []
+
+        if isinstance(ics, list):
+            records: list[tuple[str, dict[str, Any]]] = []
+            for item in ics:
+                if not isinstance(item, dict):
+                    continue
+                strategy_name = (
+                    item.get("Strategy")
+                    or item.get("strategy")
+                    or item.get("Name")
+                    or item.get("name")
+                )
+                if strategy_name:
+                    records.append((str(strategy_name), item))
+            return records
+
+        if not isinstance(ics, dict):
+            return []
+
+        if any(isinstance(v, dict) for v in ics.values()):
+            return [(str(k), v) for k, v in ics.items() if isinstance(v, dict)]
+
+        strategy_names = (
+            ics.get("Strategy")
+            or ics.get("strategy")
+            or ics.get("Interest_Crediting_Strategy")
+            or ics.get("interest_crediting_strategy")
+        )
+        if strategy_names is None:
+            return []
+
+        if not isinstance(strategy_names, list):
+            strategy_names = [strategy_names]
+
+        records = []
+        for idx, strategy_name in enumerate(strategy_names):
+            if strategy_name in (None, ""):
+                continue
+            details: dict[str, Any] = {}
+            for key, value in ics.items():
+                if re.sub(r"[^a-z0-9]", "", str(key).lower()) == "strategy":
+                    continue
+                if isinstance(value, list):
+                    details[key] = value[idx] if idx < len(value) else None
+                else:
+                    details[key] = value
+            records.append((str(strategy_name), details))
+        return records
+
     def parse(self) -> TestCaseInputs:
         inp = TestCaseInputs(pdf_name=self.pdf_name)
         p = self._get(["profile"]) or self._get(["Profile"]) or {}
         inc = self._get(["income_details"]) or {}
         ics = self._get(["interest_crediting_strategy"]) or {}
+        raw_lb = inc.get("Living_Benefit") or inc.get("living_benefit") or "None"
 
         # --- Product & Category ---
         raw_product = p.get("Product") or p.get("product") or ""
         if not raw_product:
             self._warn_missing("Product")
+        raw_product = self._product_with_income_variant(raw_product, raw_lb)
         excel_product = PRODUCT_MAP.get(raw_product, "")
         if raw_product and not excel_product:
             # fuzzy fallback: case-insensitive contains match
@@ -508,7 +615,6 @@ class TestCaseParser:
         inp.category = PRODUCT_TO_CATEGORY.get(excel_product, "Index Series")
 
         # --- Living Benefit ---
-        raw_lb = inc.get("Living_Benefit") or inc.get("living_benefit") or "None"
         raw_lb_lower = str(raw_lb).lower().strip()
         if "none" in raw_lb_lower or raw_lb_lower == "":
             inp.livben = "None"
@@ -640,9 +746,7 @@ class TestCaseParser:
             self._warn_missing("interest_crediting_strategy")
             return strategies
 
-        for json_name, details in ics.items():
-            if not isinstance(details, dict):
-                continue
+        for json_name, details in self._strategy_records(ics):
             excel_name = STRATEGY_MAP.get(json_name, "")
             if not excel_name:
                 # fuzzy match
@@ -669,9 +773,21 @@ class TestCaseParser:
             # Detect rate value — check multiple keys
             rate_raw = None
             if rate_type == "cap":
-                rate_raw = details.get("Cap") or details.get("cap") or details.get("Participation_Rate")
+                rate_raw = (
+                    details.get("Cap")
+                    or details.get("cap")
+                    or details.get("Rate")
+                    or details.get("rate")
+                    or details.get("Participation_Rate")
+                )
             elif rate_type == "parrate":
-                rate_raw = details.get("Participation_Rate") or details.get("par_rate") or details.get("ParRate")
+                rate_raw = (
+                    details.get("Participation_Rate")
+                    or details.get("par_rate")
+                    or details.get("ParRate")
+                    or details.get("Rate")
+                    or details.get("rate")
+                )
             elif rate_type == "spread":
                 rate_raw = details.get("Spread") or details.get("spread")
             elif rate_type == "triggered":
@@ -783,37 +899,103 @@ class WorkbookPopulator:
         """Set workbook calculation to manual so inputs don't trigger mid-write recalc."""
         self.wb.calculation.calcMode = "manual"
 
+    def _available_strategy_names(self) -> list[str]:
+        """
+        Read the product's available strategy order from STRTG.
+
+        This avoids relying on dynamic-array spill values that openpyxl cannot
+        reliably surface before Excel recalculation.
+        """
+        ws = self.wb["STRTG"]
+        header_row = 13
+        first_col = column_index_from_string("AG")
+        last_col = column_index_from_string("CB")
+        product_col = None
+
+        for col_idx in range(first_col, last_col + 1):
+            cell_val = ws.cell(row=header_row, column=col_idx).value
+            if str(cell_val).strip() == self.inputs.product:
+                product_col = col_idx
+                break
+
+        if product_col is None:
+            log.warning(
+                "[%s] Could not locate product '%s' in STRTG strategy table",
+                self.inputs.pdf_name,
+                self.inputs.product,
+            )
+            return []
+
+        names: list[str] = []
+        for row in range(14, 44):
+            raw = ws.cell(row=row, column=product_col).value
+            if raw in (None, ""):
+                continue
+            names.append(str(raw).strip())
+        return names
+
     def _write_strategy_rates(self):
-        """Write strategy allocations and rate values into the rate table (rows 142+)."""
+        """Write strategy allocations and rate values into the strategy input areas."""
         ws = self.wb["Inputs & Summary"]
         strat_map = {s.excel_name: s for s in self.inputs.strategies}
+        available = self._available_strategy_names()
 
-        # Scan rows 142 onwards for strategy names in col E
-        for row in range(142, 200):
-            cell_e = ws[f"E{row}"]
-            if not cell_e.value:
+        # Reset the visible strategy selection area.
+        for row in range(108, 138):
+            ws[f"B{row}"] = None
+            ws[f"{ALLOC_COL}{row}"] = 0
+
+        # Reset the strategy rate table.
+        for row in range(142, 172):
+            ws[f"B{row}"] = None
+            ws[f"{ALLOC_COL}{row}"] = 0
+            for col in ("E", "F", "G", "H", "I"):
+                ws[f"{col}{row}"] = None
+
+        if not available:
+            return
+
+        selection_rows = {}
+        for idx, name in enumerate(available):
+            row = 108 + idx
+            if row > 137:
                 break
-            strat_name = str(cell_e.value).strip()
-            if strat_name in strat_map:
-                s = strat_map[strat_name]
-                # Write allocation to col C
-                ws[f"{ALLOC_COL}{row}"] = s.allocation
-                # Write rate to appropriate column
-                rate_col = RATE_COL_ACTUAL.get(s.rate_type, "G")
-                ws[f"{rate_col}{row}"] = s.rate
-            else:
-                # Zero out allocation for strategies not in our set
-                ws[f"{ALLOC_COL}{row}"] = 0
+            ws[f"B{row}"] = name
+            selection_rows[name] = row
 
-        # Also zero out the CaB checkbox area (rows 107-137 col C = check boxes)
-        # Leave as-is unless explicitly set by strategy
-        # Reset allocation in the check-box area too (rows 107-122)
-        for row in range(107, 123):
-            cell_g = ws[f"G{row}"]
-            if cell_g.value and str(cell_g.value).strip() in strat_map:
-                ws[f"C{row}"] = strat_map[str(cell_g.value).strip()].allocation
+        rate_rows = {}
+        for idx, name in enumerate(available):
+            row = 142 + idx
+            if row > 171:
+                break
+            ws[f"B{row}"] = name
+            rate_rows[name] = row
+
+        for strat_name, s in strat_map.items():
+            selection_row = selection_rows.get(strat_name)
+            if selection_row is not None:
+                ws[f"{ALLOC_COL}{selection_row}"] = s.allocation
             else:
-                ws[f"C{row}"] = 0
+                log.warning(
+                    "[%s] Strategy '%s' was not found in selection rows for product '%s'",
+                    self.inputs.pdf_name,
+                    strat_name,
+                    self.inputs.product,
+                )
+
+            rate_row = rate_rows.get(strat_name)
+            if rate_row is None:
+                log.warning(
+                    "[%s] Strategy '%s' was not found in rate rows for product '%s'",
+                    self.inputs.pdf_name,
+                    strat_name,
+                    self.inputs.product,
+                )
+                continue
+
+            ws[f"{ALLOC_COL}{rate_row}"] = s.allocation
+            rate_col = RATE_COL_ACTUAL.get(s.rate_type, "G")
+            ws[f"{rate_col}{rate_row}"] = s.rate
 
     def populate(self):
         log.info("[%s] Populating workbook …", self.inputs.pdf_name)
