@@ -1412,6 +1412,7 @@ Usage:
 """
 import shutil
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -1421,6 +1422,11 @@ try:
 except ImportError:
     print("xlwings not installed.  Run: pip install xlwings")
     sys.exit(1)
+
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 SCENARIO_NAMED_RANGE = "Summary"
 SCENARIOS = {
@@ -1480,20 +1486,30 @@ def _resolve_requested_workbooks(folder: Path, requested: list[str]) -> list[Pat
     return resolved
 
 def _excel_staging_root() -> Path:
+    if sys.platform.startswith("win"):
+        root = Path(tempfile.gettempdir()) / "product_illustration_automation_recalc"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     candidates = [
         Path.home() / "Library/Containers/com.microsoft.Excel/Data/Documents",
         Path.home() / "Library/Group Containers/UBF8T346G9.Office",
     ]
-    for candidate in candidates:
-        if candidate.exists():
-            root = candidate / "product_illustration_automation_recalc"
-            root.mkdir(parents=True, exist_ok=True)
-            return root
-    raise RuntimeError(
-        "Could not locate an Excel sandbox-safe staging folder. "
-        "Expected one of: ~/Library/Containers/com.microsoft.Excel/Data/Documents "
-        "or ~/Library/Group Containers/UBF8T346G9.Office"
-    )
+    if sys.platform == "darwin":
+        for candidate in candidates:
+            if candidate.exists():
+                root = candidate / "product_illustration_automation_recalc"
+                root.mkdir(parents=True, exist_ok=True)
+                return root
+        raise RuntimeError(
+            "Could not locate an Excel sandbox-safe staging folder. "
+            "Expected one of: ~/Library/Containers/com.microsoft.Excel/Data/Documents "
+            "or ~/Library/Group Containers/UBF8T346G9.Office"
+        )
+
+    root = Path(tempfile.gettempdir()) / "product_illustration_automation_recalc"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 def _prepare_staged_copy(original_path: Path, staging_dir: Path) -> Path:
     staged_path = staging_dir / original_path.name
@@ -1501,7 +1517,7 @@ def _prepare_staged_copy(original_path: Path, staging_dir: Path) -> Path:
     return staged_path
 
 def recalc_workbook(app, xl_path: Path, staging_dir: Path):
-    print(f"[recalc] Opening {xl_path.name} ...")
+    print(f"[recalc] Opening {xl_path.name} ...", flush=True)
     wb = None
     staged_path = _prepare_staged_copy(xl_path, staging_dir)
     try:
@@ -1520,7 +1536,7 @@ def recalc_workbook(app, xl_path: Path, staging_dir: Path):
             wb = app.books.open(str(staged_path.resolve()))
 
         for scenario_key, excel_val in SCENARIOS.items():
-            print(f"  scenario={scenario_key} ({excel_val})")
+            print(f"  scenario={scenario_key} ({excel_val})", flush=True)
             # Write Summary named range
             rng = wb.names[SCENARIO_NAMED_RANGE].refers_to_range
             rng.value = excel_val
@@ -1537,7 +1553,7 @@ def recalc_workbook(app, xl_path: Path, staging_dir: Path):
         time.sleep(2)
         wb.save()
         shutil.copy2(staged_path, xl_path)
-        print(f"  Saved {xl_path.name}")
+        print(f"  Saved {xl_path.name}", flush=True)
     finally:
         if wb is not None:
             wb.close()
@@ -1551,11 +1567,13 @@ if __name__ == "__main__":
     requested_workbooks = sys.argv[2:]
     xlsx_files = _resolve_requested_workbooks(folder, requested_workbooks)
     if not xlsx_files:
-        print(f"No .xlsx files found in {folder}")
+        print(f"No .xlsx files found in {folder}", flush=True)
         sys.exit(1)
 
+    print("[recalc] Starting Excel app ...", flush=True)
     app = xw.App(visible=False, add_book=False)
     _configure_app(app)
+    print("[recalc] Excel app ready.", flush=True)
     staging_dir = _excel_staging_root() / f"run_{folder.name}_{uuid.uuid4().hex[:8]}"
     staging_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -1564,7 +1582,7 @@ if __name__ == "__main__":
     finally:
         app.quit()
         shutil.rmtree(staging_dir, ignore_errors=True)
-    print("Done.")
+    print("Done.", flush=True)
 '''
 
 # ---------------------------------------------------------------------------
@@ -1742,7 +1760,7 @@ def write_run_manifest(
     save_json(manifest, output_dir / "run_config.json")
 
 def run_recalc_helper(recalc_path: Path, workbook_dir: Path, workbook_names: list[str]):
-    cmd = [sys.executable, str(recalc_path), str(workbook_dir)]
+    cmd = [sys.executable, "-u", str(recalc_path), str(workbook_dir)]
     cmd.extend(workbook_names)
     log.info("===== RECALCULATION: Recalculate workbooks =====")
     log.info("Running: %s", " ".join(cmd))

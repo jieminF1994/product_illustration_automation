@@ -12,6 +12,11 @@ DEFAULT_PDF_DIR = PROJECT_PARENT_DIR / "data" / "pdf"
 DEMO_DIR = PROJECT_DIR / "demo"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
 
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 
 def ensure_demo_dir() -> Path:
     DEMO_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,4 +46,3 @@ def configure_demo_logging(log_file: Path) -> None:
     file_handler = logging.FileHandler(resolved_log_file, mode="w", encoding="utf-8")
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
-

@@ -58,6 +58,10 @@ def main() -> int:
         )
     except RuntimeError as exc:
         log.error("Failed to initialize extractor: %s", exc)
+        log.error(
+            "On Windows, install pypdf in the same interpreter first. "
+            "The 'auto' extractor selects from installed backends, but it does not install packages."
+        )
         return 2
 
     _, dropped = pipeline.run()
@@ -68,4 +72,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
