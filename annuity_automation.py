@@ -39,7 +39,9 @@ import shutil
 import string
 import subprocess
 import sys
+import time
 import uuid
+import warnings
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,15 +51,41 @@ import openpyxl
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
 
+from extract_annuity_data import AnnuityExtractorPipeline
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-log = logging.getLogger(__name__)
+LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+log = logging.getLogger("annuity_automation")
+
+
+def configure_logging(log_file: Path | None = None):
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    formatter = logging.Formatter(LOG_FORMAT)
+
+    has_console = any(getattr(handler, "_annuity_console", False) for handler in root.handlers)
+    if not has_console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        console_handler._annuity_console = True  # type: ignore[attr-defined]
+        root.addHandler(console_handler)
+
+    if log_file is None:
+        return
+
+    resolved_log_file = log_file.resolve()
+    has_file = any(
+        isinstance(handler, logging.FileHandler)
+        and Path(getattr(handler, "baseFilename", "")).resolve() == resolved_log_file
+        for handler in root.handlers
+    )
+    if not has_file:
+        resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(resolved_log_file, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_PARENT_DIR = SCRIPT_DIR.parent
@@ -72,6 +100,8 @@ VALID_PHASES = {1, 2, 3}
 config: dict[str, Any] = {
     # "template": str(DEFAULT_TEMPLATE_PATH),
     # "json": str(DEFAULT_JSON_PATH),
+    # "pdf_dir": "/absolute/path/to/pdf_dir",
+    # "pdf_extractor": "auto",
     # "phases": [1, 2, 3],
     # "test_cases": ["Example 1.pdf", "Example 2.pdf"],
     # "results_root": str(DEFAULT_RESULTS_ROOT),
@@ -137,14 +167,24 @@ def load_workbook_compat(path: Path, **kwargs):
     Load workbook with openpyxl; if strict OOXML leads to zero visible sheets,
     normalize namespaces in-place and retry once.
     """
-    wb = load_workbook(path, **kwargs)
+    def _safe_load():
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Cell .* is marked as a date but the serial value .* is outside the limits for dates\.",
+                category=UserWarning,
+                module=r"openpyxl\.worksheet\._reader",
+            )
+            return load_workbook(path, **kwargs)
+
+    wb = _safe_load()
     if wb.sheetnames:
         return wb
     wb.close()
 
     if _normalize_strict_xlsx_inplace(path):
         log.info("Normalized strict OOXML namespaces for %s", path.name)
-        wb = load_workbook(path, **kwargs)
+        wb = _safe_load()
         if wb.sheetnames:
             return wb
         wb.close()
@@ -1163,15 +1203,17 @@ class OutputComparator:
         "zero_growth":     "zero_growth",
         "constant_growth": "constant_growth",
     }
-    # column name in tool output → column name in product_structure
-    COL_COMPARE_MAP = {
+    TOOL_TO_REF_COLUMN_MAP = {
         "Age":                        "Age",
         "Credited_Interest_Rate":     "Credited_Interest_Rate",
+        "Interest_Earned":            "Interest_Earned",
         "Contract_Anniversary_Value": "Contract_Anniversary_Value",
         "Cash_Surrender_Value":       "Cash_Surrender_Value",
-        "Minimum_Withdrawal_Value":   "Death_Benefit",   # best match available
+        "Minimum_Withdrawal_Value":   "Death_Benefit",
+        "GMAB_Value":                 "Minimum_Accumulation_Value",
     }
-    TOLERANCE = 0.01   # relative tolerance for average comparison
+    RATE_ABS_TOLERANCE = 0.0005
+    VALUE_ABS_TOLERANCE = 1.0
 
     def __init__(self, tool_output: dict, product_structure: dict):
         self.tool = tool_output
@@ -1186,17 +1228,104 @@ class OutputComparator:
             "scenario":  scenario,
             "message":   message,
         })
+        self._counter += 1
 
-    def _safe_avg(self, lst: list, length: int | None = None) -> float | None:
-        nums = []
-        for i, v in enumerate(lst):
-            if length is not None and i >= length:
-                break
-            try:
-                nums.append(float(v))
-            except (TypeError, ValueError):
-                pass
-        return sum(nums) / len(nums) if nums else None
+    @staticmethod
+    def _normalized_key(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+    def _find_ref_column(self, tool_col: str, ref_scenario: dict) -> str | None:
+        preferred = self.TOOL_TO_REF_COLUMN_MAP.get(tool_col)
+        if preferred in ref_scenario:
+            return preferred
+
+        normalized_tool = self._normalized_key(tool_col)
+        normalized_preferred = self._normalized_key(preferred or "")
+
+        for ref_col in ref_scenario:
+            normalized_ref = self._normalized_key(ref_col)
+            if normalized_ref == normalized_tool:
+                return ref_col
+            if normalized_preferred and normalized_ref == normalized_preferred:
+                return ref_col
+
+        for ref_col in ref_scenario:
+            normalized_ref = self._normalized_key(ref_col)
+            if normalized_ref in normalized_tool or normalized_tool in normalized_ref:
+                return ref_col
+            if normalized_preferred and (
+                normalized_ref in normalized_preferred or normalized_preferred in normalized_ref
+            ):
+                return ref_col
+        return None
+
+    @staticmethod
+    def _normalize_value(value: Any) -> tuple[str, Any]:
+        if value is None:
+            return ("empty", None)
+        if isinstance(value, bool):
+            return ("text", str(value))
+        if isinstance(value, (int, float)):
+            return ("number", float(value))
+
+        text = str(value).strip()
+        if not text:
+            return ("empty", None)
+        if text in {"-", "--"}:
+            return ("dash", text)
+        if text.upper() == "N/A":
+            return ("text", "N/A")
+
+        cleaned = text.replace(",", "").replace("$", "")
+        negative = cleaned.startswith("(") and cleaned.endswith(")")
+        if negative:
+            cleaned = cleaned[1:-1]
+        is_percent = cleaned.endswith("%")
+        if is_percent:
+            cleaned = cleaned[:-1]
+
+        try:
+            num = float(cleaned)
+            if negative:
+                num = -num
+            if is_percent:
+                num /= 100
+            return ("number", num)
+        except ValueError:
+            return ("text", text)
+
+    def _values_match(self, column_name: str, tool_value: Any, ref_value: Any) -> bool:
+        tool_kind, tool_normalized = self._normalize_value(tool_value)
+        ref_kind, ref_normalized = self._normalize_value(ref_value)
+
+        if tool_kind == ref_kind == "empty":
+            return True
+        if tool_kind == ref_kind == "number":
+            normalized_col = self._normalized_key(column_name)
+            if normalized_col in {"year", "age"}:
+                return int(round(tool_normalized)) == int(round(ref_normalized))
+            tolerance = (
+                self.RATE_ABS_TOLERANCE
+                if any(token in normalized_col for token in ("rate", "change", "percentage", "credit"))
+                else self.VALUE_ABS_TOLERANCE
+            )
+            return abs(tool_normalized - ref_normalized) <= tolerance
+        return tool_normalized == ref_normalized
+
+    @staticmethod
+    def _row_label(years: list[Any], ages: list[Any], idx: int) -> str:
+        year = years[idx] if idx < len(years) else None
+        age = ages[idx] if idx < len(ages) else None
+        parts = []
+        if year not in (None, ""):
+            parts.append(f"Year={year}")
+        if age not in (None, ""):
+            parts.append(f"Age={age}")
+        return ", ".join(parts) if parts else f"row {idx + 1}"
+
+    def _should_skip_column(self, column_name: str) -> bool:
+        normalized = self._normalized_key(column_name)
+        return normalized == "year" or normalized.startswith("indexchangecol")
 
     def compare(self):
         for pdf_name, tool_data in self.tool.items():
@@ -1206,65 +1335,67 @@ class OutputComparator:
             for scenario, scen_data in tool_data.get("scenario", {}).items():
                 ref_scenario = ref_scenarios.get(scenario, {})
                 if not ref_scenario:
+                    self._log(pdf_name, scenario, "scenario is missing in product_structure.json")
                     continue
 
-                # --- Age / length check ---
-                tool_age = scen_data.get("Age", [])
-                ref_age = ref_scenario.get("Age", ref_scenario.get("age", []))
-                len_tool = len([x for x in tool_age if x is not None])
-                len_ref = len([x for x in ref_age if x is not None])
-                shared_len = min(len_tool, len_ref) if (len_tool and len_ref) else None
+                tool_years = scen_data.get("Year", [])
+                ref_years = ref_scenario.get("Year", [])
+                tool_ages = scen_data.get("Age", [])
+                ref_ages = ref_scenario.get("Age", ref_scenario.get("age", []))
 
-                if len_tool != len_ref:
-                    self._log(pdf_name, scenario,
-                              "column length is not aligned, please check PDF and illustration tool")
-
-                # --- Column value comparisons ---
-                for tool_col, ref_col in self.COL_COMPARE_MAP.items():
-                    tool_vals = scen_data.get(tool_col, [])
-                    ref_vals = ref_scenario.get(ref_col, ref_scenario.get(tool_col, []))
-                    if not tool_vals and not ref_vals:
+                for tool_col, tool_vals in scen_data.items():
+                    if tool_col == "_errors" or not isinstance(tool_vals, list):
+                        continue
+                    if self._should_skip_column(tool_col):
                         continue
 
-                    t_avg = self._safe_avg(tool_vals, shared_len)
-                    r_avg = self._safe_avg(ref_vals, shared_len)
-
-                    if t_avg is None or r_avg is None:
-                        continue
-                    if r_avg == 0:
-                        diff = abs(t_avg)
-                    else:
-                        diff = abs(t_avg - r_avg) / abs(r_avg)
-                    if diff > self.TOLERANCE:
-                        self._log(pdf_name, scenario,
-                                  f"column {tool_col} value is not matching")
-
-                # --- Dynamic index change columns ---
-                for tool_col, vals in scen_data.items():
-                    if "index" not in tool_col.lower() and "change" not in tool_col.lower():
-                        continue
-                    # try to find matching ref column
-                    ref_col = None
-                    for k in ref_scenario:
-                        if (k.lower().replace(" ", "_") == tool_col.lower().replace(" ", "_")
-                                or k.lower() in tool_col.lower()):
-                            ref_col = k
-                            break
+                    ref_col = self._find_ref_column(tool_col, ref_scenario)
                     if ref_col is None:
+                        self._log(pdf_name, scenario, f"column {tool_col} is missing in product_structure.json")
                         continue
-                    t_avg = self._safe_avg(vals, shared_len)
-                    r_avg = self._safe_avg(ref_scenario[ref_col], shared_len)
-                    if t_avg is None or r_avg is None:
-                        continue
-                    if r_avg == 0:
-                        diff = abs(t_avg)
-                    else:
-                        diff = abs(t_avg - r_avg) / abs(r_avg)
-                    if diff > self.TOLERANCE:
-                        self._log(pdf_name, scenario,
-                                  f"column {tool_col} value is not matching")
 
-            self._counter += 1
+                    ref_vals = ref_scenario.get(ref_col)
+                    if not isinstance(ref_vals, list):
+                        self._log(
+                            pdf_name,
+                            scenario,
+                            f"column {ref_col} in product_structure.json is not a comparable list",
+                        )
+                        continue
+
+                    if len(tool_vals) != len(ref_vals):
+                        self._log(
+                            pdf_name,
+                            scenario,
+                            f"column {tool_col} length mismatch (tool={len(tool_vals)}, ref={len(ref_vals)})",
+                        )
+
+                    shared_len = min(len(tool_vals), len(ref_vals))
+                    for idx in range(shared_len):
+                        tool_kind, tool_normalized = self._normalize_value(tool_vals[idx])
+                        ref_kind, _ = self._normalize_value(ref_vals[idx])
+                        normalized_col = self._normalized_key(tool_col)
+                        if (
+                            idx == 0
+                            and tool_kind == "number"
+                            and tool_normalized == 0
+                            and ref_kind in {"dash", "empty"}
+                            and any(token in normalized_col for token in ("rate", "change", "interest"))
+                        ):
+                            continue
+                        if self._values_match(tool_col, tool_vals[idx], ref_vals[idx]):
+                            continue
+                        row_label = self._row_label(
+                            tool_years if tool_years else ref_years,
+                            tool_ages if tool_ages else ref_ages,
+                            idx,
+                        )
+                        self._log(
+                            pdf_name,
+                            scenario,
+                            f"column {tool_col} mismatch at {row_label} (tool={tool_vals[idx]!r}, ref={ref_vals[idx]!r})",
+                        )
+                        break
         return self.records
 
 # ---------------------------------------------------------------------------
@@ -1478,6 +1609,25 @@ def _resolve_input_path(raw_value: str | Path | None, default_path: Path) -> Pat
             return candidate
     return candidates[0]
 
+
+def _resolve_optional_input_path(raw_value: str | Path | None) -> Path | None:
+    if raw_value in (None, ""):
+        return None
+
+    path = Path(raw_value).expanduser()
+    if path.is_absolute():
+        return path
+
+    candidates = [
+        Path.cwd() / path,
+        SCRIPT_DIR / path,
+        PROJECT_PARENT_DIR / path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
 def _resolve_output_path(raw_value: str | Path | None) -> Path | None:
     if raw_value in (None, ""):
         return None
@@ -1572,16 +1722,22 @@ def write_run_manifest(
     json_path: Path,
     phases: list[int],
     requested_cases: list[str],
+    pdf_dir: Path | None = None,
+    pdf_extractor: str | None = None,
+    log_path: Path | None = None,
 ):
     manifest = {
         "submitted_at": dt.datetime.now().astimezone().isoformat(),
         "valuation_id": valuation_id,
         "template_path": str(template_path),
         "json_path": str(json_path),
+        "pdf_dir": str(pdf_dir) if pdf_dir else None,
+        "pdf_extractor": pdf_extractor,
         "phases": phases,
         "test_cases": requested_cases,
         "output_dir": str(output_dir),
         "workbook_dir": str(workbook_dir),
+        "run_log_path": str(log_path) if log_path else None,
     }
     save_json(manifest, output_dir / "run_config.json")
 
@@ -1632,6 +1788,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Annuity Automation Script")
     ap.add_argument("--template", help="Path to template .xlsx")
     ap.add_argument("--json", help="Path to product_structure.json")
+    ap.add_argument("--pdf-dir", help="Directory containing source PDFs for integrated extraction + automation flow")
+    ap.add_argument(
+        "--pdf-extractor",
+        choices=["auto", "pypdf", "pypdf2", "pdfkit"],
+        help="PDF text extraction backend when --pdf-dir is used",
+    )
     ap.add_argument("--output-dir",
                     help="Folder for this run's output files. If omitted, a dated valuation folder is created under results/.")
     ap.add_argument("--results-root",
@@ -1648,6 +1810,8 @@ def build_runtime_settings(args: argparse.Namespace, runtime_config: dict[str, A
     cli_values = {
         "template": args.template,
         "json": args.json,
+        "pdf_dir": args.pdf_dir,
+        "pdf_extractor": args.pdf_extractor,
         "output_dir": args.output_dir,
         "results_root": args.results_root,
         "phases": args.phases,
@@ -1662,6 +1826,8 @@ def build_runtime_settings(args: argparse.Namespace, runtime_config: dict[str, A
 
     template_path = _resolve_input_path(merged.get("template"), DEFAULT_TEMPLATE_PATH)
     json_path = _resolve_input_path(merged.get("json"), DEFAULT_JSON_PATH)
+    pdf_dir = _resolve_optional_input_path(merged.get("pdf_dir"))
+    pdf_extractor = str(merged.get("pdf_extractor") or "auto")
     explicit_output_dir = _resolve_output_path(merged.get("output_dir"))
     results_root = _resolve_output_path(merged.get("results_root")) or DEFAULT_RESULTS_ROOT
     phases = normalize_phases(merged.get("phases"))
@@ -1689,6 +1855,8 @@ def build_runtime_settings(args: argparse.Namespace, runtime_config: dict[str, A
     return {
         "template_path": template_path,
         "json_path": json_path,
+        "pdf_dir": pdf_dir,
+        "pdf_extractor": pdf_extractor,
         "output_dir": output_dir,
         "workbook_dir": workbook_dir,
         "results_root": results_root,
@@ -1698,6 +1866,8 @@ def build_runtime_settings(args: argparse.Namespace, runtime_config: dict[str, A
     }
 
 def main(runtime_config: dict[str, Any] | None = None):
+    configure_logging()
+    started_at = time.perf_counter()
     args = parse_args()
 
     try:
@@ -1708,20 +1878,50 @@ def main(runtime_config: dict[str, Any] | None = None):
 
     template_path = settings["template_path"]
     json_path = settings["json_path"]
+    pdf_dir = settings["pdf_dir"]
+    pdf_extractor = settings["pdf_extractor"]
     output_dir = settings["output_dir"]
     workbook_dir = settings["workbook_dir"]
     phases = settings["phases"]
     requested_cases = settings["test_cases"]
     valuation_id = settings["valuation_id"]
+    run_log_path = output_dir / "run.log"
 
-    if not template_path.exists():
+    configure_logging(run_log_path)
+
+    if 1 in phases and not template_path.exists():
         log.error("Template file not found: %s", template_path)
         sys.exit(1)
-    if not json_path.exists():
+    if pdf_dir is None and not json_path.exists():
         log.error("JSON file not found: %s", json_path)
         sys.exit(1)
+    if pdf_dir is not None and not pdf_dir.exists():
+        log.error("PDF directory not found: %s", pdf_dir)
+        sys.exit(1)
 
-    product_structure = load_json(json_path)
+    log.info("Run output directory: %s", output_dir)
+    log.info("Workbook directory: %s", workbook_dir)
+    log.info("Valuation ID: %s", valuation_id)
+    log.info("Run log: %s", run_log_path)
+
+    if pdf_dir is not None:
+        json_path = output_dir / "product_structure.json"
+        drop_file = output_dir / "drop_pdf"
+        log.info("===== EXTRACTION: Parse PDFs into product_structure.json =====")
+        try:
+            extractor = AnnuityExtractorPipeline(
+                pdf_dir=pdf_dir,
+                output_json=json_path,
+                drop_file=drop_file,
+                extractor_backend=pdf_extractor,
+            )
+            product_structure, dropped = extractor.run()
+            log.info("Extraction complete. drop_pdf count: %d", len(dropped))
+        except RuntimeError as exc:
+            log.error("Error initializing PDF extractor: %s", exc)
+            sys.exit(2)
+    else:
+        product_structure = load_json(json_path)
     try:
         product_structure = filter_product_structure(product_structure, requested_cases)
     except ValueError as exc:
@@ -1732,9 +1932,6 @@ def main(runtime_config: dict[str, Any] | None = None):
     all_errors: list[dict] = []
     tool_output: dict = {}
 
-    log.info("Run output directory: %s", output_dir)
-    log.info("Workbook directory: %s", workbook_dir)
-    log.info("Valuation ID: %s", valuation_id)
     if requested_cases:
         log.info("Selected test case(s): %s", ", ".join(product_structure.keys()))
 
@@ -1746,6 +1943,9 @@ def main(runtime_config: dict[str, Any] | None = None):
         json_path=json_path,
         phases=phases,
         requested_cases=list(product_structure.keys()),
+        pdf_dir=pdf_dir,
+        pdf_extractor=pdf_extractor,
+        log_path=run_log_path,
     )
 
     recalc_path = workbook_dir / "recalc_helper.py"
@@ -1797,6 +1997,7 @@ def main(runtime_config: dict[str, Any] | None = None):
     save_csv(all_errors, output_dir / "error_report.csv",
              fieldnames=["number", "test_case", "error_message"])
     log.info("All done.")
+    log.info("Total processing time: %.2f seconds", time.perf_counter() - started_at)
 
 
 if __name__ == "__main__":

@@ -11,14 +11,48 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+
+LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+log = logging.getLogger("extract_annuity_data")
+
+
+def configure_logging(log_file: Optional[Path] = None) -> None:
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    formatter = logging.Formatter(LOG_FORMAT)
+
+    has_console = any(getattr(handler, "_extract_console", False) for handler in root.handlers)
+    if not has_console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        console_handler._extract_console = True  # type: ignore[attr-defined]
+        root.addHandler(console_handler)
+
+    if log_file is None:
+        return
+
+    resolved_log_file = log_file.resolve()
+    has_file = any(
+        isinstance(handler, logging.FileHandler)
+        and Path(getattr(handler, "baseFilename", "")).resolve() == resolved_log_file
+        for handler in root.handlers
+    )
+    if not has_file:
+        resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(resolved_log_file, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
 
 
 PDF_HELPER_SOURCE = r"""
@@ -396,6 +430,47 @@ class SectionParser:
                 income["Annual_Rider_Fee"] = m.group(1)
         return profile, income, cls._parse_strategy(lines)
 
+    @classmethod
+    def parse_additional_income_details(
+        cls, pages: List[List[str]], profile: Dict[str, str], income: Dict[str, str]
+    ) -> Dict[str, str]:
+        extra: Dict[str, str] = {}
+        product_name = (profile.get("Product") or "").lower()
+        joined_lines = pages if pages else []
+
+        if "aico" in product_name or cls._pages_contain(joined_lines, "aico"):
+            aico_fee = cls._find_first_match(
+                joined_lines,
+                [
+                    r"annual fee of\s*([0-9]+(?:\.[0-9]+)?%)",
+                    r"fee percentage is\s*([0-9]+(?:\.[0-9]+)?%)",
+                    r"product fee:.*?([0-9]+(?:\.[0-9]+)?%)",
+                ],
+            )
+            aico_multiplier_rate = cls._find_first_match(
+                joined_lines,
+                [
+                    r"aico multiplier rate[:\s]*([0-9]+(?:\.[0-9]+)?%)",
+                    r"the\s+([0-9]+(?:\.[0-9]+)?%)\s+multiplier rate",
+                ],
+            )
+            aico_maximum_rate = cls._find_first_match(
+                joined_lines,
+                [
+                    r"aico maximum rate[:\s]*([0-9]+(?:\.[0-9]+)?%)",
+                    r"maximum rate.*?([0-9]+(?:\.[0-9]+)?%)",
+                ],
+            )
+
+            if aico_fee and not income.get("AICO_Fee"):
+                extra["AICO_Fee"] = aico_fee
+            if aico_multiplier_rate and not income.get("AICO_Multiplier_Rate"):
+                extra["AICO_Multiplier_Rate"] = aico_multiplier_rate
+            if aico_maximum_rate and not income.get("AICO_Maximum_Rate"):
+                extra["AICO_Maximum_Rate"] = aico_maximum_rate
+
+        return extra
+
     @staticmethod
     def _parse_key_value_line(line: str) -> Optional[Tuple[str, str]]:
         if ":" not in line:
@@ -432,6 +507,31 @@ class SectionParser:
                 value = match.group(2).strip() if match.lastindex and match.lastindex >= 2 else ""
                 return match.group(1).strip(), value
         return None
+
+    @staticmethod
+    def _pages_contain(pages: List[List[str]], needle: str) -> bool:
+        lowered_needle = needle.lower()
+        for lines in pages:
+            for line in lines:
+                if lowered_needle in line.lower():
+                    return True
+        return False
+
+    @staticmethod
+    def _find_first_match(pages: List[List[str]], patterns: List[str]) -> str:
+        for lines in pages:
+            for line in lines:
+                for pattern in patterns:
+                    match = re.search(pattern, line, flags=re.IGNORECASE)
+                    if match:
+                        return match.group(1)
+
+        full_text = " ".join(" ".join(lines) for lines in pages)
+        for pattern in patterns:
+            match = re.search(pattern, full_text, flags=re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return ""
 
     @staticmethod
     def _parse_strategy(lines: List[str]) -> Dict[str, List[str]]:
@@ -602,6 +702,7 @@ class SectionParser:
 
 
 class ScenarioParser:
+    DATE_RANGE_RE = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})\s*-\s*(\d{1,2}/\d{1,2}/\d{4})")
     REQUIRED_CANONICAL_COLUMNS = [
         "Year",
         "Age",
@@ -635,8 +736,10 @@ class ScenarioParser:
             scenarios["zero_growth"] = self._parse_table_from_page(pages[zero_page], force_31_rows=True)
         if specific_page is not None:
             scenarios["specific"] = self._parse_table_from_page(pages[specific_page], force_31_rows=True)
+            self._attach_specific_period_dates(scenarios["specific"], pages, specific_page)
         if constant_page is not None:
             scenarios["constant_growth"] = self._parse_table_from_page(pages[constant_page], force_31_rows=True)
+            self._attach_constant_growth_rate(scenarios["constant_growth"], pages, constant_page)
 
         fav = self._find_named_specific(pages, "favorable specific period illustration")
         unfav = self._find_named_specific(pages, "unfavorable specific period illustration")
@@ -646,6 +749,58 @@ class ScenarioParser:
             scenarios["unfavorable"] = unfav
 
         return scenarios
+
+    def _attach_specific_period_dates(
+        self, scenario_data: Dict[str, List[str] | str], pages: List[List[str]], preferred_page: int
+    ) -> None:
+        for page_index in self._candidate_page_indexes(pages, preferred_page, "specific period"):
+            for line in pages[page_index]:
+                if "specific period" not in line.lower():
+                    continue
+                match = self.DATE_RANGE_RE.search(line)
+                if match:
+                    scenario_data["index_start_date"] = match.group(1)
+                    scenario_data["index_end_date"] = match.group(2)
+                    return
+
+        for page_index in self._candidate_page_indexes(pages, preferred_page, ""):
+            page_text = " ".join(pages[page_index])
+            match = self.DATE_RANGE_RE.search(page_text)
+            if match:
+                scenario_data["index_start_date"] = match.group(1)
+                scenario_data["index_end_date"] = match.group(2)
+                return
+
+    def _attach_constant_growth_rate(
+        self, scenario_data: Dict[str, List[str] | str], pages: List[List[str]], preferred_page: int
+    ) -> None:
+        patterns = [
+            r"([0-9]+(?:\.[0-9]+)?)%\s+assumed index interest rate",
+            r"([0-9]+(?:\.[0-9]+)?)%\s+assumed rate",
+        ]
+        for page_index in self._candidate_page_indexes(pages, preferred_page, "assumed"):
+            for line in pages[page_index]:
+                for pattern in patterns:
+                    match = re.search(pattern, line, flags=re.IGNORECASE)
+                    if match:
+                        scenario_data["constant_growth_rate"] = f"{match.group(1)}%"
+                        return
+
+    @staticmethod
+    def _candidate_page_indexes(
+        pages: List[List[str]], preferred_page: Optional[int], required_text: str
+    ) -> List[int]:
+        indexes: List[int] = []
+        if preferred_page is not None and 0 <= preferred_page < len(pages):
+            indexes.append(preferred_page)
+
+        lowered_required = required_text.lower()
+        for idx, lines in enumerate(pages):
+            if idx in indexes:
+                continue
+            if not lowered_required or lowered_required in " ".join(lines).lower():
+                indexes.append(idx)
+        return indexes
 
     def _find_main_scenario_page(self, pages: List[List[str]], kind: str) -> Optional[int]:
         best: Optional[int] = None
@@ -915,20 +1070,28 @@ class AnnuityExtractorPipeline:
         self.scenario_parser = ScenarioParser()
 
     def run(self) -> Tuple[Dict[str, dict], List[str]]:
+        started_at = time.perf_counter()
         product_structure: Dict[str, dict] = {}
         dropped: List[str] = []
 
         pdf_files = sorted([p for p in self.pdf_dir.glob("*.pdf") if p.is_file()])
+        log.info("processing PDFs: %s", ", ".join(pdf.name for pdf in pdf_files) if pdf_files else "(none)")
         for pdf_path in pdf_files:
+            log.info("[%s] extracting PDF text", pdf_path.name)
             try:
                 pages = self.text_extractor.extract_pages(pdf_path)
-            except Exception:
+            except Exception as exc:
+                log.exception("[%s] failed during text extraction: %s", pdf_path.name, exc)
                 dropped.append(pdf_path.name)
                 continue
 
+            log.info("[%s] parsing scenario tables", pdf_path.name)
             scenarios = self.scenario_parser.parse_all(pages)
+            log.info("[%s] parsing profile, income details, and strategy sections", pdf_path.name)
             first_scenario_lines = self._pick_first_scenario_lines(pages)
             profile, income_details, strategy = SectionParser.parse_sections(first_scenario_lines)
+            extra_income_details = SectionParser.parse_additional_income_details(pages, profile, income_details)
+            income_details.update(extra_income_details)
 
             product_structure[pdf_path.name] = {
                 "Profile": profile,
@@ -938,13 +1101,19 @@ class AnnuityExtractorPipeline:
             }
 
             if not self._is_successful_extraction(scenarios):
+                log.warning("[%s] extraction is incomplete; adding to drop_pdf", pdf_path.name)
                 dropped.append(pdf_path.name)
+            else:
+                log.info("[%s] extraction completed", pdf_path.name)
 
         self.output_json.write_text(json.dumps(product_structure, indent=2), encoding="utf-8")
         drop_text = "\n".join(dropped)
         if drop_text:
             drop_text += "\n"
         self.drop_file.write_text(drop_text, encoding="utf-8")
+        log.info("Saved %s", self.output_json)
+        log.info("Saved %s", self.drop_file)
+        log.info("Extractor total processing time: %.2f seconds", time.perf_counter() - started_at)
         return product_structure, dropped
 
     @staticmethod
@@ -999,11 +1168,18 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="PDF text extraction backend. 'auto' prefers pypdf/PyPDF2 and falls back to macOS pdfkit.",
     )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        help="Optional run log path.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
+    started_at = time.perf_counter()
     args = parse_args()
+    configure_logging(args.log_file)
     try:
         pipeline = AnnuityExtractorPipeline(
             pdf_dir=args.pdf_dir,
@@ -1012,14 +1188,14 @@ def main() -> int:
             extractor_backend=args.pdf_extractor,
         )
     except RuntimeError as exc:
-        print(f"Error initializing PDF extractor: {exc}", file=sys.stderr)
-        print(
-            "Tip: On Windows/Linux install pypdf with `pip install pypdf` and use `--pdf-extractor auto`.",
-            file=sys.stderr,
+        log.error("Error initializing PDF extractor: %s", exc)
+        log.error(
+            "Tip: On Windows/Linux install pypdf with `pip install pypdf` and use --pdf-extractor auto."
         )
         return 2
     _, dropped = pipeline.run()
-    print(f"Completed. drop_pdf count: {len(dropped)}")
+    log.info("Completed. drop_pdf count: %d", len(dropped))
+    log.info("Total processing time: %.2f seconds", time.perf_counter() - started_at)
     return 0
 
 
