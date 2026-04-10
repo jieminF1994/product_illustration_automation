@@ -1440,6 +1440,10 @@ def _app_visible_default() -> bool:
     return sys.platform.startswith("win")
 
 def _configure_app(app):
+    if sys.platform.startswith("win"):
+        print("[recalc] Skipping advanced Excel startup configuration on Windows.", flush=True)
+        return
+
     # Reduce UI prompts during batch automation.
     try:
         app.display_alerts = False
@@ -1577,6 +1581,7 @@ if __name__ == "__main__":
     visible = _app_visible_default()
     print(f"[recalc] Starting Excel app ... visible={visible}", flush=True)
     app = xw.App(visible=visible, add_book=False)
+    print("[recalc] Excel app started.", flush=True)
     _configure_app(app)
     print("[recalc] Excel app ready.", flush=True)
     staging_dir = _excel_staging_root() / f"run_{folder.name}_{uuid.uuid4().hex[:8]}"
