@@ -1129,13 +1129,17 @@ class ReportReader:
         # Check for Excel errors in any cell
         errors_found = []
 
+        saw_data = False
         for row in ws.iter_rows(min_row=self.DATA_START_ROW, values_only=False):
             row_dict = {}
             for idx, c in enumerate(row, start=1):
                 row_dict[get_column_letter(idx)] = c
             year_cell = row_dict.get("Q")
             if year_cell is None or year_cell.value is None:
-                continue  # blank row — stop reading
+                if saw_data:
+                    break
+                continue
+            saw_data = True
             # Check for formula errors
             for cl, key in read_cols.items():
                 cell = row_dict.get(cl)
@@ -1152,6 +1156,13 @@ class ReportReader:
 
         out["_errors"] = errors_found
         return out
+
+
+SCENARIO_OUTPUT_SUFFIX = ".scenario_output.json"
+
+
+def scenario_output_path_for_workbook(wb_path: Path) -> Path:
+    return wb_path.with_name(f"{wb_path.stem}{SCENARIO_OUTPUT_SUFFIX}")
 
 # ---------------------------------------------------------------------------
 # Phase 2: OutputGatherer
@@ -1179,6 +1190,22 @@ class OutputGatherer:
                 log.warning("Workbook not found for %s — skipping output gather", pdf_name)
                 continue
             result[pdf_name] = {"scenario": {}}
+            scenario_output_path = scenario_output_path_for_workbook(wb_path)
+            if scenario_output_path.exists():
+                log.info("[%s] Loading captured scenario outputs from %s", pdf_name, scenario_output_path.name)
+                captured = load_json(scenario_output_path)
+                scenario_map = captured.get("scenario", {})
+                for scenario in self.SCENARIOS:
+                    log.info("[%s] Reading captured Report output for scenario=%s", pdf_name, scenario)
+                    data = copy.deepcopy(scenario_map.get(scenario, {}))
+                    errs = data.pop("_errors", [])
+                    if errs:
+                        msg = (f"report tab has error in illustration tool, please check calculation "
+                               f"({', '.join(errs[:3])})")
+                        self.error_log.append({"test_case": pdf_name, "error_message": msg})
+                    result[pdf_name]["scenario"][scenario] = data
+                continue
+
             reader = ReportReader(wb_path)
             for scenario in self.SCENARIOS:
                 log.info("[%s] Reading Report tab for scenario=%s", pdf_name, scenario)
@@ -1410,6 +1437,8 @@ Usage:
     python recalc_helper.py ./excel_test_cases
     python recalc_helper.py ./excel_test_cases "example.pdf.xlsx" "another.pdf.xlsx"
 """
+import json
+import re
 import shutil
 import sys
 import tempfile
@@ -1434,6 +1463,23 @@ SCENARIOS = {
     "zero_growth":     "Zero Growth",
     "constant_growth": "Constant Growth",
 }
+OUTPUT_COLS = {
+    "S":  "index_change_col_S",
+    "T":  "index_change_col_T",
+    "U":  "index_change_col_U",
+    "V":  "index_change_col_V",
+    "W":  "index_change_col_W",
+    "X":  "Credited_Interest_Rate",
+    "Y":  "Interest_Earned",
+    "AF": "Contract_Anniversary_Value",
+    "AG": "Cash_Surrender_Value",
+    "AH": "Minimum_Withdrawal_Value",
+    "AI": "GMAB_Value",
+    "R":  "Age",
+    "Q":  "Year",
+}
+HEADER_ROW = 11
+DATA_START_ROW = 13
 
 def _app_visible_default() -> bool:
     # Excel startup on Windows is often more reliable when the app is visible.
@@ -1524,10 +1570,67 @@ def _prepare_staged_copy(original_path: Path, staging_dir: Path) -> Path:
     shutil.copy2(original_path, staged_path)
     return staged_path
 
+def _col_index(col_letter: str) -> int:
+    idx = 0
+    for char in col_letter.upper():
+        idx = idx * 26 + (ord(char) - ord("A") + 1)
+    return idx
+
+def _scenario_output_path(xl_path: Path) -> Path:
+    return xl_path.with_name(f"{xl_path.stem}.scenario_output.json")
+
+def _capture_report_data(wb, scenario: str) -> dict:
+    ws = wb.sheets["Report"]
+    last_col = int(ws.used_range.last_cell.column)
+    last_row = int(ws.used_range.last_cell.row)
+
+    header_values = ws.range((HEADER_ROW, 1), (HEADER_ROW, last_col)).value
+    if not isinstance(header_values, list):
+        header_values = [header_values]
+
+    headers = {}
+    for col_idx, value in enumerate(header_values, start=1):
+        if isinstance(value, str) and value.strip():
+            headers[col_idx] = value.strip()
+
+    read_cols = {_col_index(col_letter): key for col_letter, key in OUTPUT_COLS.items()}
+    for col_idx, header in headers.items():
+        if 19 <= col_idx <= 23 and "change" in header.lower():
+            safe_key = re.sub(r"[^a-zA-Z0-9_]", "_", header)
+            read_cols[col_idx] = safe_key
+
+    out = {key: [] for key in read_cols.values()}
+    errors_found = []
+    year_col_idx = _col_index("Q")
+
+    saw_data = False
+    for row_idx in range(DATA_START_ROW, last_row + 1):
+        year_val = ws.range((row_idx, year_col_idx)).value
+        if year_val is None:
+            if saw_data:
+                break
+            continue
+        saw_data = True
+        for col_idx, key in read_cols.items():
+            val = ws.range((row_idx, col_idx)).value
+            if isinstance(val, str) and val.startswith("#"):
+                errors_found.append(f"{col_idx}:{row_idx}={val}")
+            out[key].append(val)
+
+    if errors_found:
+        print(
+            f"[recalc] Report tab errors in {wb.name} scenario={scenario}: {', '.join(errors_found[:5])}",
+            flush=True,
+        )
+
+    out["_errors"] = errors_found
+    return out
+
 def recalc_workbook(app, xl_path: Path, staging_dir: Path):
     print(f"[recalc] Opening {xl_path.name} ...", flush=True)
     wb = None
     staged_path = _prepare_staged_copy(xl_path, staging_dir)
+    scenario_output = {"scenario": {}}
     try:
         # update_links=False avoids repeated "update links/grant access" prompts
         # when files contain references.
@@ -1551,8 +1654,7 @@ def recalc_workbook(app, xl_path: Path, staging_dir: Path):
             # Force recalculate
             wb.app.calculate()
             time.sleep(3)   # give Excel time to finish
-
-            # Read & cache outputs here if needed (or just save and let Phase 2 handle it)
+            scenario_output["scenario"][scenario_key] = _capture_report_data(wb, scenario_key)
 
         # Leave as Specific before final save
         rng = wb.names[SCENARIO_NAMED_RANGE].refers_to_range
@@ -1561,6 +1663,12 @@ def recalc_workbook(app, xl_path: Path, staging_dir: Path):
         time.sleep(2)
         wb.save()
         shutil.copy2(staged_path, xl_path)
+        scenario_output_path = _scenario_output_path(xl_path)
+        scenario_output_path.write_text(
+            json.dumps(scenario_output, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"  Captured scenario outputs -> {scenario_output_path.name}", flush=True)
         print(f"  Saved {xl_path.name}", flush=True)
     finally:
         if wb is not None:
