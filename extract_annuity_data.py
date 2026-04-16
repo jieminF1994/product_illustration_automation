@@ -10,6 +10,7 @@ PDF text extraction backends:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import re
@@ -1069,10 +1070,10 @@ class AnnuityExtractorPipeline:
         self.text_extractor = build_text_extractor(backend=extractor_backend)
         self.scenario_parser = ScenarioParser()
 
-    def run(self) -> Tuple[Dict[str, dict], List[str]]:
+    def run(self) -> Tuple[Dict[str, dict], List[Dict[str, str]]]:
         started_at = time.perf_counter()
         product_structure: Dict[str, dict] = {}
-        dropped: List[str] = []
+        dropped: List[Dict[str, str]] = []
 
         pdf_files = sorted([p for p in self.pdf_dir.glob("*.pdf") if p.is_file()])
         log.info("processing PDFs: %s", ", ".join(pdf.name for pdf in pdf_files) if pdf_files else "(none)")
@@ -1082,16 +1083,40 @@ class AnnuityExtractorPipeline:
                 pages = self.text_extractor.extract_pages(pdf_path)
             except Exception as exc:
                 log.exception("[%s] failed during text extraction: %s", pdf_path.name, exc)
-                dropped.append(pdf_path.name)
+                dropped.append({
+                    "pdf_name": pdf_path.name,
+                    "reason": f"text extraction failed: {exc}",
+                    "product_name": "",
+                })
                 continue
 
-            log.info("[%s] parsing scenario tables", pdf_path.name)
-            scenarios = self.scenario_parser.parse_all(pages)
             log.info("[%s] parsing profile, income details, and strategy sections", pdf_path.name)
             first_scenario_lines = self._pick_first_scenario_lines(pages)
             profile, income_details, strategy = SectionParser.parse_sections(first_scenario_lines)
             extra_income_details = SectionParser.parse_additional_income_details(pages, profile, income_details)
             income_details.update(extra_income_details)
+            product_name = (profile.get("Product") or "").strip()
+
+            if self._should_drop_product(product_name):
+                log.warning("[%s] unsupported product '%s'; adding to drop_report", pdf_path.name, product_name)
+                dropped.append({
+                    "pdf_name": pdf_path.name,
+                    "reason": "unsupported product (Polaris)",
+                    "product_name": product_name,
+                })
+                continue
+
+            log.info("[%s] parsing scenario tables", pdf_path.name)
+            scenarios = self.scenario_parser.parse_all(pages)
+
+            if not self._is_successful_extraction(scenarios):
+                log.warning(
+                    "[%s] extraction is incomplete; keeping it in product_structure.json "
+                    "and not adding it to drop_report",
+                    pdf_path.name,
+                )
+            else:
+                log.info("[%s] extraction completed", pdf_path.name)
 
             product_structure[pdf_path.name] = {
                 "Profile": profile,
@@ -1100,17 +1125,11 @@ class AnnuityExtractorPipeline:
                 "scenario": scenarios,
             }
 
-            if not self._is_successful_extraction(scenarios):
-                log.warning("[%s] extraction is incomplete; adding to drop_pdf", pdf_path.name)
-                dropped.append(pdf_path.name)
-            else:
-                log.info("[%s] extraction completed", pdf_path.name)
-
         self.output_json.write_text(json.dumps(product_structure, indent=2), encoding="utf-8")
-        drop_text = "\n".join(dropped)
-        if drop_text:
-            drop_text += "\n"
-        self.drop_file.write_text(drop_text, encoding="utf-8")
+        with open(self.drop_file, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=["pdf_name", "reason", "product_name"])
+            writer.writeheader()
+            writer.writerows(dropped)
         log.info("Saved %s", self.output_json)
         log.info("Saved %s", self.drop_file)
         log.info("Extractor total processing time: %.2f seconds", time.perf_counter() - started_at)
@@ -1141,6 +1160,11 @@ class AnnuityExtractorPipeline:
                 return False
         return True
 
+    @staticmethod
+    def _should_drop_product(product_name: str) -> bool:
+        normalized = product_name.casefold()
+        return "polaris platinum" in normalized or "polaris" in normalized
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract annuity data from PDFs.")
@@ -1159,8 +1183,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--drop-file",
         type=Path,
-        default=Path("drop_pdf"),
-        help="Output text file for unmatched PDFs.",
+        default=Path("drop_report.csv"),
+        help="Output CSV file for dropped PDFs.",
     )
     parser.add_argument(
         "--pdf-extractor",
@@ -1194,7 +1218,7 @@ def main() -> int:
         )
         return 2
     _, dropped = pipeline.run()
-    log.info("Completed. drop_pdf count: %d", len(dropped))
+    log.info("Completed. drop_report count: %d", len(dropped))
     log.info("Total processing time: %.2f seconds", time.perf_counter() - started_at)
     return 0
 

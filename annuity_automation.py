@@ -1169,6 +1169,21 @@ SCENARIO_OUTPUT_SUFFIX = ".scenario_output.json"
 def scenario_output_path_for_workbook(wb_path: Path) -> Path:
     return wb_path.with_name(f"{wb_path.stem}{SCENARIO_OUTPUT_SUFFIX}")
 
+
+def workbook_stem_for_test_case(test_case_name: str) -> str:
+    file_name = Path(test_case_name).name
+    if file_name.lower().endswith(".pdf"):
+        return file_name[:-4]
+    return file_name
+
+
+def workbook_path_for_test_case(output_dir: Path, test_case_name: str) -> Path:
+    preferred = output_dir / f"{workbook_stem_for_test_case(test_case_name)}.xlsx"
+    legacy = output_dir / f"{Path(test_case_name).name}.xlsx"
+    if preferred.exists() or not legacy.exists():
+        return preferred
+    return legacy
+
 # ---------------------------------------------------------------------------
 # Phase 2: OutputGatherer
 # ---------------------------------------------------------------------------
@@ -1190,7 +1205,7 @@ class OutputGatherer:
     def gather(self, test_cases: dict) -> dict:
         result = {}
         for pdf_name in test_cases:
-            wb_path = self.output_dir / f"{pdf_name}.xlsx"
+            wb_path = workbook_path_for_test_case(self.output_dir, pdf_name)
             if not wb_path.exists():
                 log.warning("Workbook not found for %s — skipping output gather", pdf_name)
                 continue
@@ -1912,7 +1927,7 @@ def run_phase1(template_path: Path, product_structure: dict, output_dir: Path) -
         for err in inputs.errors:
             error_log.append({"number": counter, "test_case": pdf_name, "error_message": err})
 
-        out_path = output_dir / f"{pdf_name}.xlsx"
+        out_path = output_dir / f"{workbook_stem_for_test_case(pdf_name)}.xlsx"
         populator = WorkbookPopulator(template_path, inputs, out_path)
         try:
             populator.populate()
@@ -2057,7 +2072,7 @@ def main(runtime_config: dict[str, Any] | None = None):
 
     if pdf_dir is not None:
         json_path = output_dir / "product_structure.json"
-        drop_file = output_dir / "drop_pdf"
+        drop_file = output_dir / "drop_report.csv"
         log.info("===== EXTRACTION: Parse PDFs into product_structure.json =====")
         try:
             extractor = AnnuityExtractorPipeline(
@@ -2067,7 +2082,7 @@ def main(runtime_config: dict[str, Any] | None = None):
                 extractor_backend=pdf_extractor,
             )
             product_structure, dropped = extractor.run()
-            log.info("Extraction complete. drop_pdf count: %d", len(dropped))
+            log.info("Extraction complete. drop_report count: %d", len(dropped))
         except RuntimeError as exc:
             log.error("Error initializing PDF extractor: %s", exc)
             sys.exit(2)
@@ -2079,7 +2094,7 @@ def main(runtime_config: dict[str, Any] | None = None):
         log.error("%s", exc)
         sys.exit(1)
 
-    workbook_names = [f"{pdf_name}.xlsx" for pdf_name in product_structure]
+    workbook_names = [f"{workbook_stem_for_test_case(pdf_name)}.xlsx" for pdf_name in product_structure]
     all_errors: list[dict] = []
     tool_output: dict = {}
 

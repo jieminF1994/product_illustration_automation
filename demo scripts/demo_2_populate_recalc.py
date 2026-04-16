@@ -19,6 +19,7 @@ from annuity_automation import (
     run_phase1,
     run_recalc_helper,
     save_csv,
+    workbook_stem_for_test_case,
 )
 from demo_common import DEMO_DIR, configure_demo_logging, ensure_demo_dir
 
@@ -78,7 +79,7 @@ def main() -> int:
         log.error("%s", exc)
         return 1
 
-    workbook_names = [f"{pdf_name}.xlsx" for pdf_name in product_structure]
+    workbook_names = [f"{workbook_stem_for_test_case(pdf_name)}.xlsx" for pdf_name in product_structure]
     recalc_path = workbook_dir / "recalc_helper.py"
     recalc_path.write_text(RECALC_HELPER, encoding="utf-8")
     log.info("Wrote recalc helper: %s", recalc_path)

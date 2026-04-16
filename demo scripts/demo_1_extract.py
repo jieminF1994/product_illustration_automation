@@ -43,7 +43,7 @@ def main() -> int:
     configure_demo_logging(demo_dir / "demo1_run.log")
 
     output_json = demo_dir / "product_structure.json"
-    drop_file = demo_dir / "drop_pdf"
+    drop_file = demo_dir / "drop_report.csv"
 
     log.info("Demo folder: %s", demo_dir)
     log.info("PDF directory: %s", args.pdf_dir)
@@ -69,7 +69,7 @@ def main() -> int:
         return 2
 
     _, dropped = pipeline.run()
-    log.info("Demo 1 complete. drop_pdf count: %d", len(dropped))
+    log.info("Demo 1 complete. drop_report count: %d", len(dropped))
     log.info("Total processing time: %.2f seconds", time.perf_counter() - started_at)
     return 0
 
