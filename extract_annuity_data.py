@@ -1096,13 +1096,14 @@ class AnnuityExtractorPipeline:
             extra_income_details = SectionParser.parse_additional_income_details(pages, profile, income_details)
             income_details.update(extra_income_details)
             product_name = (profile.get("Product") or "").strip()
+            product_name_for_drop = self._drop_product_name(product_name, pages)
 
-            if self._should_drop_product(product_name):
-                log.warning("[%s] unsupported product '%s'; adding to drop_report", pdf_path.name, product_name)
+            if self._should_drop_product(product_name_for_drop):
+                log.warning("[%s] unsupported product '%s'; adding to drop_report", pdf_path.name, product_name_for_drop)
                 dropped.append({
                     "pdf_name": pdf_path.name,
                     "reason": "unsupported product (Polaris)",
-                    "product_name": product_name,
+                    "product_name": product_name_for_drop,
                 })
                 continue
 
@@ -1164,6 +1165,15 @@ class AnnuityExtractorPipeline:
     def _should_drop_product(product_name: str) -> bool:
         normalized = product_name.casefold()
         return "polaris platinum" in normalized or "polaris" in normalized
+
+    @staticmethod
+    def _drop_product_name(product_name: str, pages: List[List[str]]) -> str:
+        if product_name:
+            return product_name
+
+        full_text = " ".join(" ".join(lines) for lines in pages)
+        match = re.search(r"(Polaris Platinum|Polaris)", full_text, flags=re.IGNORECASE)
+        return match.group(1) if match else product_name
 
 
 def parse_args() -> argparse.Namespace:
